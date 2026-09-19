@@ -1,0 +1,115 @@
+name: Sync Upstream & Releases
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/gituib/idc_assest.git
+
+      - name: Fetch upstream
+        run: git fetch upstream --tags
+
+      - name: Sync master branch
+        run: |
+          git checkout master
+          git merge upstream/master --ff-only || git merge upstream/master --no-edit
+          git push origin master
+        continue-on-error: true
+
+      - name: Sync tags
+        run: |
+          git push origin --tags 2>/dev/null || true
+
+      - name: Sync Releases
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const upstreamOwner = 'gituib';
+            const upstreamRepo  = 'idc_assest';
+            const { owner, repo } = context.repo;
+
+            const upstreamReleases = await github.paginate(
+              github.rest.releases.list,
+              { owner: upstreamOwner, repo: upstreamRepo, per_page: 100 }
+            );
+
+            if (upstreamReleases.length === 0) {
+              core.info('No upstream releases found.');
+              return;
+            }
+
+            const existingTags = new Set();
+            try {
+              const tags = await github.paginate(
+                github.rest.repos.listTags,
+                { owner, repo, per_page: 100 }
+              );
+              tags.forEach(t => existingTags.add(t.name));
+            } catch (e) {
+              core.warning(`Failed to list existing tags: ${e.message}`);
+            }
+
+            let synced = 0;
+            for (const rel of upstreamReleases) {
+              if (existingTags.has(rel.tag_name)) continue;
+              core.info(`Syncing release: ${rel.tag_name} (${rel.name})`);
+
+              const newRelease = await github.rest.releases.create({
+                owner, repo,
+                tag_name: rel.tag_name,
+                name: rel.name || rel.tag_name,
+                body: rel.body || '',
+                draft: false,
+                prerelease: rel.prerelease,
+                make_latest: 'false'
+              });
+
+              for (const asset of rel.assets) {
+                try {
+                  const response = await fetch(asset.url, {
+                    headers: {
+                      Accept: 'application/octet-stream',
+                      Authorization: `token ${process.env.GITHUB_TOKEN}`,
+                      'User-Agent': 'sync-action'
+                    }
+                  });
+                  if (!response.ok) {
+                    core.warning(`Failed to download ${asset.name}: ${response.status}`);
+                    continue;
+                  }
+                  const buffer = Buffer.from(await response.arrayBuffer());
+                  await github.rest.releases.uploadAsset({
+                    owner, repo,
+                    release_id: newRelease.data.id,
+                    name: asset.name,
+                    data: buffer
+                  });
+                  core.info(`  Uploaded asset: ${asset.name}`);
+                } catch (e) {
+                  core.warning(`  Asset ${asset.name} failed: ${e.message}`);
+                }
+              }
+              synced++;
+            }
+            core.info(`Synced ${synced} new release(s).`);
