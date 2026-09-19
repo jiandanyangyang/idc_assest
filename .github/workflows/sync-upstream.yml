@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  workflows: write
 
 jobs:
   sync:
@@ -50,7 +51,7 @@ jobs:
             const { owner, repo } = context.repo;
 
             const upstreamReleases = await github.paginate(
-              github.rest.releases.list,
+              'GET /repos/{owner}/{repo}/releases',
               { owner: upstreamOwner, repo: upstreamRepo, per_page: 100 }
             );
 
@@ -62,7 +63,7 @@ jobs:
             const existingTags = new Set();
             try {
               const tags = await github.paginate(
-                github.rest.repos.listTags,
+                'GET /repos/{owner}/{repo}/tags',
                 { owner, repo, per_page: 100 }
               );
               tags.forEach(t => existingTags.add(t.name));
@@ -75,7 +76,7 @@ jobs:
               if (existingTags.has(rel.tag_name)) continue;
               core.info(`Syncing release: ${rel.tag_name} (${rel.name})`);
 
-              const newRelease = await github.rest.releases.create({
+              const newRelease = await github.request('POST /repos/{owner}/{repo}/releases', {
                 owner, repo,
                 tag_name: rel.tag_name,
                 name: rel.name || rel.tag_name,
@@ -87,24 +88,33 @@ jobs:
 
               for (const asset of rel.assets) {
                 try {
-                  const response = await fetch(asset.url, {
+                  const dlResp = await fetch(asset.url, {
                     headers: {
                       Accept: 'application/octet-stream',
                       Authorization: `token ${process.env.GITHUB_TOKEN}`,
                       'User-Agent': 'sync-action'
                     }
                   });
-                  if (!response.ok) {
-                    core.warning(`Failed to download ${asset.name}: ${response.status}`);
+                  if (!dlResp.ok) {
+                    core.warning(`Failed to download ${asset.name}: ${dlResp.status}`);
                     continue;
                   }
-                  const buffer = Buffer.from(await response.arrayBuffer());
-                  await github.rest.releases.uploadAsset({
-                    owner, repo,
-                    release_id: newRelease.data.id,
-                    name: asset.name,
-                    data: buffer
+                  const buffer = Buffer.from(await dlResp.arrayBuffer());
+                  const uploadUrl = newRelease.data.upload_url.split('{')[0];
+                  const ulResp = await fetch(`${uploadUrl}?name=${encodeURIComponent(asset.name)}`, {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `token ${process.env.GITHUB_TOKEN}`,
+                      'User-Agent': 'sync-action',
+                      'Content-Type': 'application/octet-stream',
+                      'Content-Length': buffer.length
+                    },
+                    body: buffer
                   });
+                  if (!ulResp.ok) {
+                    core.warning(`Failed to upload ${asset.name}: ${ulResp.status} ${await ulResp.text()}`);
+                    continue;
+                  }
                   core.info(`  Uploaded asset: ${asset.name}`);
                 } catch (e) {
                   core.warning(`  Asset ${asset.name} failed: ${e.message}`);
