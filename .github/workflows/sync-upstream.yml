@@ -27,7 +27,7 @@ jobs:
         run: git remote add upstream https://github.com/gituib/idc_assest.git
 
       - name: Fetch upstream
-        run: git fetch upstream --tags
+        run: git fetch upstream --tags --force
 
       - name: Sync master branch
         run: |
