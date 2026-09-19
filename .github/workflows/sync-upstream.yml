@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   sync:
@@ -32,8 +31,16 @@ jobs:
 
       - name: Sync master branch
         run: |
+          set +e
           git checkout master
-          git merge upstream/master --ff-only || git merge upstream/master --no-edit
+          git merge upstream/master --ff-only
+          if [ $? -ne 0 ]; then
+            git merge upstream/master --no-edit
+          fi
+          # Restore our own .github/workflows/ to avoid GITHUB_TOKEN permission error
+          git checkout origin/master -- .github/workflows/ 2>/dev/null || true
+          git add .github/workflows/ 2>/dev/null || true
+          git commit --amend --no-edit 2>/dev/null || true
           git push origin master
         continue-on-error: true
 
