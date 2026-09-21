@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { log } = require('./logger');
 const { runCommand } = require('./utils');
 const { config } = require('./config');
 const { rollbackSteps } = require('./rollback');
 const { NPM_MIRRORS } = require('./constants');
+const { isRootUser } = require('./env-check');
 
 function checkRegistryReachable(registry, timeout = 10000) {
   return new Promise((resolve) => {
@@ -226,6 +228,38 @@ async function startServices() {
   }
 
   runCommand('pm2 save', { silent: true });
+
+  // ---- 设置 PM2 开机自启（仅 Linux）----
+  if (process.platform === 'linux') {
+    log.info('设置 PM2 开机自启...');
+    try {
+      const currentUser = os.userInfo().username;
+      const homeDir = os.homedir();
+      const isRoot = isRootUser();
+
+      // pm2 startup 会生成一条 sudo 命令，直接拼好执行
+      // root 运行：pm2 startup systemd -u root --hp /root
+      // 普通用户运行：sudo env PATH=$PATH pm2 startup systemd -u <user> --hp <home>
+      const startupCmd = isRoot
+        ? `pm2 startup systemd -u root --hp /root`
+        : `sudo env PATH=$PATH pm2 startup systemd -u ${currentUser} --hp ${homeDir}`;
+
+      const startupResult = runCommand(startupCmd, { silent: true });
+      if (startupResult.success) {
+        log.success('PM2 开机自启已配置');
+      } else {
+        // 非致命错误，脚本继续
+        log.warning('PM2 开机自启自动配置失败，请手动执行:');
+        const manualCmd = isRoot
+          ? `pm2 startup systemd -u root --hp /root && pm2 save`
+          : `sudo env PATH=$PATH pm2 startup systemd -u ${currentUser} --hp ${homeDir} && pm2 save`;
+        log.info(manualCmd);
+      }
+    } catch (err) {
+      log.warning(`PM2 开机自启配置异常: ${err.message}`);
+      log.info('可手动执行: pm2 startup && pm2 save');
+    }
+  }
 
   log.divider();
 }

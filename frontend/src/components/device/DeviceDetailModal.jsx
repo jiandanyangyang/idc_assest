@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Modal, Button, Row, Col, Tag, Progress } from 'antd';
+import { Modal, Button, Row, Col, Tag, Progress, Image } from 'antd';
 import {
   AppstoreOutlined,
   EnvironmentOutlined,
@@ -15,9 +15,12 @@ import {
   SyncOutlined,
   StopOutlined,
   DesktopOutlined,
+  PictureOutlined,
+  ApiOutlined,
 } from '@ant-design/icons';
 import { designTokens } from '../../config/theme';
 import { getStatusConfig, getTypeLabel, getDeviceTypeIcon } from '../../utils/deviceUtils.jsx';
+import DeviceCredentialSection from './DeviceCredentialSection';
 
 const { colors, shadows, borderRadius, transitions, spacing } = designTokens;
 
@@ -169,6 +172,7 @@ const DeviceDetailModal = ({
     { key: 'basic', label: '基本信息' },
     { key: 'location', label: '位置信息' },
     { key: 'maintenance', label: '维保信息' },
+    { key: 'credentials', label: '网络凭据' },
   ];
 
   return (
@@ -595,6 +599,50 @@ const DeviceDetailModal = ({
                 </Row>
               </div>
             )}
+            {Array.isArray(device.images) && device.images.length > 0 && (
+              <div
+                style={{
+                  marginTop: '16px',
+                  paddingTop: '16px',
+                  borderTop: `1px dashed ${colors.border.light}`,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: '12px',
+                    color: colors.text.tertiary,
+                    marginBottom: '12px',
+                    fontWeight: 500,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <PictureOutlined />
+                  设备图片
+                </div>
+                <Image.PreviewGroup>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                    {device.images.map((img, idx) => (
+                      <Image
+                        key={`${img.url}-${idx}`}
+                        src={img.url}
+                        alt={img.name || '设备图片'}
+                        width={104}
+                        height={104}
+                        style={{
+                          objectFit: 'cover',
+                          borderRadius: '10px',
+                          border: `1px solid ${colors.border.light}`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </Image.PreviewGroup>
+              </div>
+            )}
           </InfoCard>
         )}
 
@@ -697,6 +745,13 @@ const DeviceDetailModal = ({
               )}
             </InfoCard>
           </>
+        )}
+
+        {activeTab === 'credentials' && (
+          <DeviceCredentialSection
+            deviceId={device.deviceId}
+            deviceName={device.name}
+          />
         )}
       </div>
 

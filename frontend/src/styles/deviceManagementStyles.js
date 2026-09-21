@@ -879,16 +879,26 @@ export const generateGlobalStyles = tokens => `
     flex-shrink: 0;
   }
   
+  /* 方案 A：现代简约——表头用主题浅紫底 + 2px 主题色描边，与内容区明确分层 */
   .device-table-wrapper .ant-table-thead > tr > th {
-    white-space: normal !important;
-    word-break: break-word !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    text-align: center !important;
     font-size: 14px !important;
     font-weight: 600 !important;
     line-height: 1.4 !important;
-    padding: 14px 12px !important;
-    background: ${tokens.colors.background.tertiary} !important;
+    padding: 14px 16px !important;
+    background: ${tokens.colors.primary.bg} !important;
     color: ${tokens.colors.text.primary} !important;
-    border-bottom: 1px solid ${tokens.colors.border.light} !important;
+    border-bottom: 2px solid ${tokens.colors.primary.main} !important;
+    border-right: 1px solid ${tokens.colors.border.medium} !important;
+    letter-spacing: 0.3px;
+  }
+
+  /* 表头最后一列去掉右侧竖线，避免与容器边框重叠 */
+  .device-table-wrapper .ant-table-thead > tr > th:last-child {
+    border-right: none !important;
   }
   
   .device-table-wrapper .ant-table-tbody {
@@ -896,56 +906,107 @@ export const generateGlobalStyles = tokens => `
     min-height: 0;
   }
   
+  /* 内容单元格：统一白底，单行省略，居中对齐，水平+竖直分隔线 */
   .device-table-wrapper .ant-table-tbody > tr > td {
-    white-space: normal !important;
-    word-break: break-word !important;
-    line-height: 1.6 !important;
-    max-width: 250px !important;
-    padding: 12px !important;
-    border-bottom: 1px solid ${tokens.colors.border.light} !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    text-align: center !important;
+    line-height: 1.5 !important;
+    padding: 14px 16px !important;
+    border-bottom: 1px solid ${tokens.colors.border.medium} !important;
+    border-right: 1px solid ${tokens.colors.border.medium} !important;
+  }
+
+  /* 内容最后一列去掉右侧竖线 */
+  .device-table-wrapper .ant-table-tbody > tr > td:last-child {
+    border-right: none !important;
   }
   
+  /* 单元格内元素统一单行省略，避免内部元素撑开导致换行 */
   .device-table-wrapper .ant-table-tbody > tr > td .ant-typography,
   .device-table-wrapper .ant-table-tbody > tr > td .ant-typography-expand,
   .device-table-wrapper .ant-table-tbody > tr > td span {
-    white-space: normal !important;
-    word-break: break-word !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
   }
   
   .device-table-wrapper .ant-table-cell {
-    word-break: break-word !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
   }
   
-  .device-table-wrapper .ant-table-row-even {
+  /* 方案 A：去掉斑马纹，所有行统一白底，靠水平分隔线区分 */
+  .device-table-wrapper .ant-table-row-even > td,
+  .device-table-wrapper .ant-table-row-odd > td {
     background-color: ${tokens.colors.background.primary};
   }
   
-  .device-table-wrapper .ant-table-row-odd {
-    background-color: ${tokens.colors.background.secondary};
-  }
-  
-  .device-table-wrapper .ant-table-row-selected {
-    background-color: ${tokens.colors.primary.main}15 !important;
+  /* 选中行：主题色浅底，视觉更实在 */
+  .device-table-wrapper .ant-table-row-selected > td {
+    background-color: ${tokens.colors.primary.main}1a !important;
   }
   
   .device-table-wrapper .ant-table-row-selected:hover > td {
-    background-color: ${tokens.colors.primary.main}25 !important;
+    background-color: ${tokens.colors.primary.main}26 !important;
   }
   
+  /* 行 hover：主题浅紫底，不使用 inset 竖条（会挤占内容造成错位） */
   .device-table-wrapper .ant-table-tbody > tr:hover > td {
-    background-color: ${tokens.colors.background.tertiary} !important;
+    background-color: ${tokens.colors.primary.bg} !important;
   }
   
   .device-table-wrapper .ant-table-selection-column {
     position: sticky !important;
     left: 0 !important;
-    z-index: 2 !important;
-    background: inherit !important;
+    z-index: 3 !important;
+    background: ${tokens.colors.background.primary} !important;
+    border-right: none !important;
+    box-shadow: 1px 0 0 ${tokens.colors.border.medium} !important;
   }
-  
-  .device-table-wrapper .ant-table-tbody > tr > td:last-child {
-    min-width: 120px !important;
-    max-width: 150px !important;
+
+  /* 固定列背景不透明，避免滚动内容透出（表体白底） */
+  .device-table-wrapper .ant-table-tbody .ant-table-cell-fix-left,
+  .device-table-wrapper .ant-table-tbody .ant-table-cell-fix-right {
+    background: ${tokens.colors.background.primary} !important;
+  }
+
+  /* 固定列表头保持紫色背景 */
+  .device-table-wrapper .ant-table-thead .ant-table-cell-fix-left,
+  .device-table-wrapper .ant-table-thead .ant-table-cell-fix-right {
+    background: ${tokens.colors.primary.bg} !important;
+  }
+
+  /* 左固定列：去掉 border-right，用阴影分隔 */
+  .device-table-wrapper .ant-table-cell-fix-left {
+    border-right: none !important;
+    box-shadow: 1px 0 0 ${tokens.colors.border.medium} !important;
+  }
+
+  /* 右固定列：去掉 border-left，用阴影分隔 */
+  .device-table-wrapper .ant-table-cell-fix-right {
+    border-left: none !important;
+    box-shadow: -1px 0 0 ${tokens.colors.border.medium} !important;
+  }
+
+  /* 右固定列表头：去掉左侧竖线，用阴影 */
+  .device-table-wrapper .ant-table-thead > tr > th.ant-table-cell-fix-right {
+    border-left: none !important;
+    box-shadow: -1px 0 0 ${tokens.colors.border.medium} !important;
+  }
+
+  /* 选中行固定列背景同步 */
+  .device-table-wrapper .ant-table-row-selected > td.ant-table-cell-fix-left,
+  .device-table-wrapper .ant-table-row-selected > td.ant-table-cell-fix-right {
+    background-color: ${tokens.colors.primary.main}1a !important;
+  }
+
+  /* hover 行固定列背景同步 */
+  .device-table-wrapper .ant-table-tbody > tr:hover > td.ant-table-cell-fix-left,
+  .device-table-wrapper .ant-table-tbody > tr:hover > td.ant-table-cell-fix-right {
+    background-color: ${tokens.colors.primary.bg} !important;
   }
   
   .device-table-wrapper .ant-pagination {

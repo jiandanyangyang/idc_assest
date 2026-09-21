@@ -93,6 +93,12 @@ const Device = sequelize.define(
       defaultValue: {},
       allowNull: true,
     },
+    images: {
+      type: DataTypes.JSON,
+      defaultValue: [],
+      allowNull: true,
+      comment: '设备图片列表，JSON数组 [{url,name,size,uploadedAt}]',
+    },
   },
   {
     tableName: 'devices',

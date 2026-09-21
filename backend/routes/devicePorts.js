@@ -21,6 +21,58 @@ const requirePermission = require('../middleware/requirePermission');
 const logPortOperation = (operationType, operationDescription, params) =>
   logOperation({ module: 'port', operationType, operationDescription, ...params });
 
+/**
+ * 查询端口列表关联的接线记录
+ * @param {Array<string>} portIds - 端口ID列表
+ * @returns {Promise<Array>} 关联的接线记录
+ */
+const getPortRelatedCables = async portIds => {
+  const ports = await DevicePort.findAll({
+    where: { portId: { [Op.in]: portIds } },
+    attributes: ['portId', 'deviceId', 'portName'],
+  });
+  if (ports.length === 0) {
+    return [];
+  }
+  // 接线按 设备ID + 端口名 匹配，需逐端口构造匹配条件
+  return Cable.findAll({
+    where: {
+      [Op.or]: ports.flatMap(p => [
+        { sourceDeviceId: p.deviceId, sourcePort: p.portName },
+        { targetDeviceId: p.deviceId, targetPort: p.portName },
+      ]),
+    },
+  });
+};
+
+/**
+ * 构建设备类型归一化过滤条件（与前端 getDeviceType 规则一致，大小写不敏感）
+ * 规则：server=服务器；switch=网络设备（交换机/路由器/防火墙/存储/负载均衡）；other=有类型但不属于服务器与网络设备的自定义类型
+ * 注意：条件均为固定字符串，不含用户输入，无 SQL 注入风险；LOWER() 保证 SQLite/MySQL 兼容
+ * @param {string} deviceType - 设备类型参数：server | switch | other | all
+ * @returns {Object|null} Sequelize 条件对象；all 或未传时返回 null 表示不过滤
+ */
+const buildDeviceTypeCondition = deviceType => {
+  if (deviceType === 'server') {
+    // 服务器：type 包含 server
+    return Sequelize.literal(`LOWER(Device.type) LIKE '%server%'`);
+  }
+  if (deviceType === 'switch') {
+    // 网络设备：type 包含 switch/router/firewall/storage/loadbalancer 之一
+    return Sequelize.literal(
+      `(LOWER(Device.type) LIKE '%switch%' OR LOWER(Device.type) LIKE '%router%' OR LOWER(Device.type) LIKE '%firewall%' OR LOWER(Device.type) LIKE '%storage%' OR LOWER(Device.type) LIKE '%loadbalancer%')`
+    );
+  }
+  if (deviceType === 'other') {
+    // 其他：type 非空且不属于服务器与网络设备（排除 type 为空的设备）
+    return Sequelize.literal(
+      `(Device.type IS NOT NULL AND Device.type != '' AND LOWER(Device.type) NOT LIKE '%server%' AND LOWER(Device.type) NOT LIKE '%switch%' AND LOWER(Device.type) NOT LIKE '%router%' AND LOWER(Device.type) NOT LIKE '%firewall%' AND LOWER(Device.type) NOT LIKE '%storage%' AND LOWER(Device.type) NOT LIKE '%loadbalancer%')`
+    );
+  }
+  // all 或未传：不加类型过滤
+  return null;
+};
+
 // 设备卡片需要展示的扩展字段（含位置、网络、状态信息）
 const DEVICE_DETAIL_ATTRIBUTES = [
   'deviceId',
@@ -397,38 +449,47 @@ router.put('/:portId', requirePermission('port:edit'), async (req, res) => {
       return res.status(400).json({ error: '没有可更新的字段' });
     }
 
-    // 获取更新前的端口状态，用于记录操作日志
+    // 获取更新前的端口状态，用于重名校验与操作日志
     const beforePort = await DevicePort.findByPk(req.params.portId);
+    if (!beforePort) {
+      return res.status(404).json({ error: '端口不存在' });
+    }
 
-    const [updated] = await DevicePort.update(updateData, {
+    // 修改端口名时校验同设备下是否重名，避免唯一索引冲突抛出原始错误
+    if (updateData.portName !== undefined && updateData.portName !== beforePort.portName) {
+      const duplicatePort = await DevicePort.findOne({
+        where: { deviceId: beforePort.deviceId, portName: updateData.portName },
+      });
+      if (duplicatePort) {
+        return res.status(400).json({ error: '该设备的端口名称已存在' });
+      }
+    }
+
+    await DevicePort.update(updateData, {
       where: { portId: req.params.portId },
     });
 
-    if (updated) {
-      const port = await DevicePort.findByPk(req.params.portId, {
-        include: [
-          {
-            model: Device,
-            as: 'device',
-            attributes: ['deviceId', 'name', 'type', 'rackId'],
-          },
-        ],
-      });
+    const port = await DevicePort.findByPk(req.params.portId, {
+      include: [
+        {
+          model: Device,
+          as: 'device',
+          attributes: ['deviceId', 'name', 'type', 'rackId'],
+        },
+      ],
+    });
 
-      // 记录更新端口成功日志
-      await logPortOperation('update', `更新端口【${beforePort ? beforePort.portName : req.params.portId}】`, {
-        targetId: req.params.portId,
-        targetName: beforePort ? beforePort.portName : req.params.portId,
-        beforeState: beforePort ? beforePort.toJSON() : null,
-        afterState: port ? port.toJSON() : null,
-        req,
-        metadata: { deviceId: beforePort ? beforePort.deviceId : null, updateFields: Object.keys(updateData) },
-      });
+    // 记录更新端口成功日志
+    await logPortOperation('update', `更新端口【${beforePort.portName}】`, {
+      targetId: req.params.portId,
+      targetName: beforePort.portName,
+      beforeState: beforePort.toJSON(),
+      afterState: port ? port.toJSON() : null,
+      req,
+      metadata: { deviceId: beforePort.deviceId, updateFields: Object.keys(updateData) },
+    });
 
-      res.json(port);
-    } else {
-      res.status(404).json({ error: '端口不存在' });
-    }
+    res.json(port);
   } catch (error) {
     logger.error('更新端口失败', { error: error.message, stack: error.stack });
     // 记录更新端口失败日志
@@ -450,6 +511,21 @@ router.delete('/batch', requirePermission('port:delete'), async (req, res) => {
 
     if (!portIds || !Array.isArray(portIds) || portIds.length === 0) {
       return res.status(400).json({ error: '请提供有效的端口ID列表' });
+    }
+
+    // 校验关联接线，避免删除端口后产生孤儿接线记录
+    const relatedCables = await getPortRelatedCables(portIds);
+    if (relatedCables.length > 0) {
+      return res.status(400).json({
+        error: '部分端口存在关联的接线记录，请先删除关联的接线',
+        relatedCables: relatedCables.map(c => ({
+          cableId: c.cableId,
+          sourceDeviceId: c.sourceDeviceId,
+          sourcePort: c.sourcePort,
+          targetDeviceId: c.targetDeviceId,
+          targetPort: c.targetPort,
+        })),
+      });
     }
 
     const deletedCount = await DevicePort.destroy({
@@ -547,6 +623,21 @@ router.post('/batch-delete', requirePermission('port:delete'), async (req, res) 
       return res.status(400).json({ error: '请提供有效的端口ID列表' });
     }
 
+    // 校验关联接线，避免删除端口后产生孤儿接线记录
+    const relatedCables = await getPortRelatedCables(portIds);
+    if (relatedCables.length > 0) {
+      return res.status(400).json({
+        error: '部分端口存在关联的接线记录，请先删除关联的接线',
+        relatedCables: relatedCables.map(c => ({
+          cableId: c.cableId,
+          sourceDeviceId: c.sourceDeviceId,
+          sourcePort: c.sourcePort,
+          targetDeviceId: c.targetDeviceId,
+          targetPort: c.targetPort,
+        })),
+      });
+    }
+
     const deletedCount = await DevicePort.destroy({
       where: { portId: { [Op.in]: portIds } },
     });
@@ -642,7 +733,7 @@ router.get('/export/all', requirePermission('port:view'), async (req, res) => {
 // 解决端口数超过 pageSize 时部分设备不显示的问题
 router.get('/grouped', requirePermission('port:view'), async (req, res) => {
   try {
-    const { deviceId, roomId, rackId, page = 1, pageSize = 10 } = req.query;
+    const { deviceId, roomId, rackId, deviceType, hasPorts, page = 1, pageSize = 10 } = req.query;
     const pageNum = Math.max(1, parseInt(page) || 1);
     const pageSizeNum = Math.max(1, parseInt(pageSize) || 10);
     const offset = (pageNum - 1) * pageSizeNum;
@@ -676,24 +767,45 @@ router.get('/grouped', requirePermission('port:view'), async (req, res) => {
       deviceWhere.rackId = { [Op.in]: rackIds };
     }
 
-    // 有端口的设备查询条件（复用 deviceWhere + EXISTS 子查询）
-    const deviceWithPortsWhere = {
-      ...deviceWhere,
-      [Op.and]: [
-        Sequelize.where(
-          Sequelize.literal(
-            `EXISTS (SELECT 1 FROM device_ports WHERE device_ports.deviceId = Device.deviceId)`
-          ),
-          '=',
-          1
+    // 端口存在性过滤条件（hasPorts 参数）
+    // with（默认）：仅显示有端口设备，保持现状行为；without：仅显示无端口设备；all：不过滤
+    const normalizedHasPorts = hasPorts || 'with';
+    let portExistenceCondition = null;
+    if (normalizedHasPorts === 'without') {
+      portExistenceCondition = Sequelize.where(
+        Sequelize.literal(
+          `NOT EXISTS (SELECT 1 FROM device_ports WHERE device_ports.deviceId = Device.deviceId)`
         ),
-      ],
-    };
+        '=',
+        1
+      );
+    } else if (normalizedHasPorts !== 'all') {
+      portExistenceCondition = Sequelize.where(
+        Sequelize.literal(
+          `EXISTS (SELECT 1 FROM device_ports WHERE device_ports.deviceId = Device.deviceId)`
+        ),
+        '=',
+        1
+      );
+    }
+
+    // 组合设备筛选条件（设备类型 + 端口存在性），主查询与统计查询共用，保证筛选一致
+    const extraConditions = [];
+    const deviceTypeCondition = buildDeviceTypeCondition(deviceType);
+    if (deviceTypeCondition) {
+      extraConditions.push(deviceTypeCondition);
+    }
+    if (portExistenceCondition) {
+      extraConditions.push(portExistenceCondition);
+    }
+    const filteredDeviceWhere = extraConditions.length > 0
+      ? { ...deviceWhere, [Op.and]: extraConditions }
+      : deviceWhere;
 
     // 查询符合条件的所有设备ID（用于统计端口总数）
     const allMatchingDevices = await Device.findAll({
       attributes: ['deviceId'],
-      where: deviceWithPortsWhere,
+      where: filteredDeviceWhere,
     });
     const allMatchingDeviceIds = allMatchingDevices.map(d => d.deviceId);
 
@@ -712,11 +824,11 @@ router.get('/grouped', requirePermission('port:view'), async (req, res) => {
       where: { deviceId: { [Op.in]: allMatchingDeviceIds } },
     });
 
-    // 查询有端口的设备（用 EXISTS 子查询，避免 hasMany JOIN 导致 limit 作用于端口行）
+    // 分页查询筛选后的设备（用端口存在性子查询，避免 hasMany JOIN 导致 limit 作用于端口行）
     // 若用 include+JOIN，limit 会作用于 JOIN 后的行数，端口多的设备会占满 limit
     const { count, rows } = await Device.findAndCountAll({
       attributes: DEVICE_DETAIL_ATTRIBUTES,
-      where: deviceWithPortsWhere,
+      where: filteredDeviceWhere,
       order: [['name', 'ASC']],
       offset,
       limit: pageSizeNum,

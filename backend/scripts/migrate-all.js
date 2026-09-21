@@ -24,8 +24,6 @@ console.log(`  DB_TYPE (from env): ${DB_TYPE}`);
 console.log(`  dbDialect (actual): ${dbDialect}`);
 console.log(`  sequelize.getDialect(): ${sequelize.getDialect()}`);
 
-const { migrateCableFields } = require('./migrate-cable-fields');
-
 const migrations = [
   {
     name: 'v2.0 - 网卡和端口表',
@@ -66,6 +64,11 @@ const migrations = [
     name: '耗材SN序列号字段',
     description: '为 consumables、consumable_records、consumable_logs 添加 snList 字段',
     migrate: migrateSnList,
+  },
+  {
+    name: '设备/耗材图片字段',
+    description: '为 devices、consumables 添加 images JSON 字段（图片附件，v2.7.2）',
+    migrate: migrateImagesColumn,
   },
   {
     name: '设备型号字段可空',
@@ -162,6 +165,26 @@ const migrations = [
     name: '管理员角色权限修复',
     description: '将 admin 角色权限设置为 ["*"]，修复生产环境升级后显示无权限问题（v2.3.5）',
     migrate: migrateAdminRolePermissions,
+  },
+  {
+    name: '设备凭据表',
+    description: '创建 device_credentials 表，存储 SSH/SNMP/API 采集凭据（v2.4.0）',
+    migrate: migrateDeviceCredential,
+  },
+  {
+    name: 'device_credentials 协议扩展',
+    description: 'protocol ENUM 增加 telnet 值，支持 Telnet 采集（v2.4.0）',
+    migrate: migrateTelnetProtocol,
+  },
+  {
+    name: '重复索引清理',
+    description: '清理 MySQL 上 Sequelize sync({alter:true}) 累积的重复 UNIQUE 索引（仅 MySQL）',
+    migrate: migrateCleanDuplicateIndexes,
+  },
+  {
+    name: 'warehouseId 外键清理',
+    description: '删除 devices→warehouses 外键约束，warehouseId 设计为自由文本字段（仅 MySQL）',
+    migrate: migrateDropWarehouseFK,
   },
 ];
 
@@ -522,6 +545,40 @@ async function migrateSnList() {
     } else {
       console.log(`    ${table} 表不存在，跳过`);
     }
+  }
+}
+
+/**
+ * 设备/耗材图片字段迁移
+ *
+ * 背景：MySQL 的 JSON 列不支持字面量 DEFAULT。旧版 server.js 的 safeSync 以
+ * `ADD COLUMN images JSON DEFAULT '[]'` 新增该列在 MySQL 上会失败（且异常被静默
+ * 吞掉），导致 devices.images / consumables.images 缺失，设备/耗材列表查询报
+ * "Unknown column 'images'" 而 500。
+ *
+ * 本迁移：
+ *   - 列已存在 → 跳过
+ *   - 列缺失 → 不带默认值新增，并回填历史行为 '[]'
+ * 幂等，可重复执行。
+ */
+async function migrateImagesColumn() {
+  const tables = ['devices', 'consumables'];
+
+  for (const table of tables) {
+    if (!(await tableExists(table))) {
+      console.log(`    ${table} 表不存在，跳过`);
+      continue;
+    }
+
+    // MySQL/SQLite 的 JSON 列都不使用字面量 DEFAULT（SQLite 退化为带默认值的 TEXT）
+    const columnDef = dbDialect === 'sqlite' ? "TEXT DEFAULT '[]'" : 'JSON';
+    await addColumnIfNotExists(table, 'images', columnDef);
+
+    // 回填历史行，避免旧数据为 NULL 导致前端渲染异常
+    await sequelize.query(
+      `UPDATE ${table} SET images = '[]' WHERE images IS NULL`
+    );
+    console.log(`    ${table} 表 images 字段历史行已回填 '[]'`);
   }
 }
 
@@ -1099,6 +1156,301 @@ async function migrateAdminRolePermissions() {
   adminRole.permissions = ['*'];
   await adminRole.save();
   console.log('    admin 角色权限已修复为 ["*"]');
+}
+
+// ==================== 线缆表新增字段（原 migrate-cable-fields.js） ====================
+
+/**
+ * 为 cables 表添加 cableLabel、cableColor 等新字段
+ */
+async function migrateCableFields() {
+  const tableName = 'cables';
+
+  if (!(await tableExists(tableName))) {
+    console.log(`    ${tableName} 表不存在，跳过`);
+    return;
+  }
+
+  const newColumns = [
+    { name: 'cableLabel', def: 'VARCHAR(255)' },
+    { name: 'cableColor', def: 'VARCHAR(50)' },
+    { name: 'installedBy', def: 'VARCHAR(100)' },
+    { name: 'installedAt', def: 'DATETIME' },
+    { name: 'lastTestedAt', def: 'DATETIME' },
+  ];
+
+  for (const col of newColumns) {
+    await addColumnIfNotExists(tableName, col.name, col.def);
+  }
+
+  console.log('    线缆表字段迁移完成');
+}
+
+// ==================== 设备凭据表（原 migrate-device-credential.js） ====================
+
+/**
+ * 创建设备凭据表 device_credentials，存储 SSH/SNMP/API 采集凭据
+ * 2026-09-17 新增
+ */
+async function migrateDeviceCredential() {
+  if (await tableExists('device_credentials')) {
+    console.log('    device_credentials 表已存在，跳过');
+    return;
+  }
+
+  const queryInterface = sequelize.getQueryInterface();
+
+  await queryInterface.createTable('device_credentials', {
+    credentialId: {
+      type: sequelize.Sequelize.STRING,
+      primaryKey: true,
+      allowNull: false,
+      unique: true,
+    },
+    deviceId: {
+      type: sequelize.Sequelize.STRING,
+      allowNull: false,
+    },
+    protocol: {
+      type: sequelize.Sequelize.ENUM('ssh', 'snmp', 'api'),
+      allowNull: false,
+      defaultValue: 'ssh',
+    },
+    host: { type: sequelize.Sequelize.STRING, allowNull: true },
+    port: { type: sequelize.Sequelize.INTEGER, allowNull: true },
+    username: { type: sequelize.Sequelize.STRING, allowNull: true },
+    password: { type: sequelize.Sequelize.TEXT, allowNull: true },
+    community: { type: sequelize.Sequelize.TEXT, allowNull: true },
+    vendor: { type: sequelize.Sequelize.STRING, allowNull: true },
+    apiToken: { type: sequelize.Sequelize.TEXT, allowNull: true },
+    apiBaseUrl: { type: sequelize.Sequelize.STRING, allowNull: true },
+    isDefault: { type: sequelize.Sequelize.BOOLEAN, allowNull: false, defaultValue: false },
+    lastTestedAt: { type: sequelize.Sequelize.DATE, allowNull: true },
+    testStatus: { type: sequelize.Sequelize.ENUM('success', 'failed'), allowNull: true },
+    testMessage: { type: sequelize.Sequelize.TEXT, allowNull: true },
+    createdAt: {
+      type: sequelize.Sequelize.DATE,
+      allowNull: false,
+      defaultValue: sequelize.Sequelize.literal('CURRENT_TIMESTAMP'),
+    },
+    updatedAt: {
+      type: sequelize.Sequelize.DATE,
+      allowNull: false,
+      defaultValue: sequelize.Sequelize.literal('CURRENT_TIMESTAMP'),
+    },
+  });
+
+  // 创建索引
+  const indexSqls = [
+    'CREATE INDEX IF NOT EXISTS idx_dev_cred_deviceId ON device_credentials(deviceId)',
+    'CREATE INDEX IF NOT EXISTS idx_dev_cred_deviceId_default ON device_credentials(deviceId, isDefault)',
+    'CREATE INDEX IF NOT EXISTS idx_dev_cred_protocol ON device_credentials(protocol)',
+  ];
+
+  for (const sql of indexSqls) {
+    try {
+      await sequelize.query(sql);
+    } catch (_) {
+      // MySQL 索引已存在时忽略
+    }
+  }
+
+  console.log('    device_credentials 表创建成功');
+}
+
+// ==================== device_credentials 协议扩展（原 add-telnet-protocol.js） ====================
+
+/**
+ * 将 device_credentials.protocol ENUM 扩展为包含 'telnet'
+ * 原 ENUM('ssh','snmp','api') → 新 ENUM('ssh','snmp','telnet','api')
+ * 仅 MySQL 需要执行（SQLite 无 ENUM 约束）
+ */
+async function migrateTelnetProtocol() {
+  if (!(await tableExists('device_credentials'))) {
+    console.log('    device_credentials 表不存在，跳过');
+    return;
+  }
+
+  const dialect = sequelize.getDialect();
+
+  if (dialect !== 'mysql' && dialect !== 'mariadb') {
+    console.log('    非 MySQL 数据库，无 ENUM 约束，跳过');
+    return;
+  }
+
+  // 检查当前 ENUM 是否已包含 telnet
+  const [rows] = await sequelize.query(
+    `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'device_credentials'
+       AND COLUMN_NAME = 'protocol'`
+  );
+
+  if (rows.length === 0) {
+    console.log('    未找到 protocol 列，跳过');
+    return;
+  }
+
+  const columnType = rows[0].COLUMN_TYPE || '';
+  if (/telnet/i.test(columnType)) {
+    console.log(`    protocol 已包含 telnet（当前: ${columnType}），跳过`);
+    return;
+  }
+
+  // 扩展 ENUM
+  const TARGET_ENUM = "ENUM('ssh','snmp','telnet','api')";
+  await sequelize.query(
+    `ALTER TABLE \`device_credentials\` MODIFY COLUMN \`protocol\` ${TARGET_ENUM}
+     NOT NULL DEFAULT 'ssh' COMMENT '采集协议（api 为历史预留）'`
+  );
+
+  console.log(`    protocol ENUM 已扩展 → ${TARGET_ENUM}`);
+}
+
+// ==================== 重复索引清理（原 fixDuplicateIndexes.js + fixCompoundIndexes.js） ====================
+
+/**
+ * 清理 MySQL 上 Sequelize sync({alter:true}) 累积的重复 UNIQUE 索引
+ * 包含单列索引（fixDuplicateIndexes.js）和复合索引（fixCompoundIndexes.js）
+ * 仅 MySQL 需要执行，SQLite 不支持通过 INFORMATION_SCHEMA 检查索引
+ */
+async function migrateCleanDuplicateIndexes() {
+  const dialect = sequelize.getDialect();
+
+  if (dialect !== 'mysql' && dialect !== 'mariadb') {
+    console.log('    非 MySQL 数据库，跳过重复索引清理');
+    return;
+  }
+
+  // 查询所有表
+  const [tables] = await sequelize.query(
+    `SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'`
+  );
+
+  let totalDropped = 0;
+
+  for (const { TABLE_NAME: table } of tables) {
+    const [indexes] = await sequelize.query(`SHOW INDEX FROM \`${table}\``);
+
+    // ========== 第一部分：单列重复 UNIQUE 索引 ==========
+    // 按 (基础索引名|列名) 分组，找出 xxx_2, xxx_3 这类后缀重复
+    const singleIndexGroups = new Map();
+    indexes.forEach(idx => {
+      const name = idx.Key_name;
+      if (name === 'PRIMARY') return;
+      const match = name.match(/^(.+)_(\d+)$/);
+      const baseName = match ? match[1] : name;
+      const key = `${baseName}|${idx.Column_name}`;
+      if (!singleIndexGroups.has(key)) singleIndexGroups.set(key, []);
+      singleIndexGroups.get(key).push({
+        name,
+        column: idx.Column_name,
+        nonUnique: idx.Non_unique,
+        seq: match ? parseInt(match[2], 10) : 0,
+      });
+    });
+
+    for (const idxs of singleIndexGroups.values()) {
+      if (idxs.length <= 1) continue;
+      const uniqueIdxs = idxs.filter(i => i.nonUnique === 0);
+      if (uniqueIdxs.length <= 1) continue;
+      uniqueIdxs.sort((a, b) => a.seq - b.seq);
+      for (const idx of uniqueIdxs.slice(1)) {
+        try {
+          await sequelize.query(`DROP INDEX \`${idx.name}\` ON \`${table}\``);
+          totalDropped++;
+        } catch (_) {
+          // 忽略删除失败
+        }
+      }
+    }
+
+    // ========== 第二部分：复合重复 UNIQUE 索引 ==========
+    // 按 Key_name 分组找出复合索引（同一 Key_name 对应多列）
+    const byKeyName = new Map();
+    indexes.forEach(idx => {
+      if (idx.Key_name === 'PRIMARY') return;
+      if (idx.Non_unique !== 0) return;
+      if (!byKeyName.has(idx.Key_name)) byKeyName.set(idx.Key_name, []);
+      byKeyName.get(idx.Key_name).push(idx);
+    });
+
+    const compoundGroups = new Map();
+    byKeyName.forEach((cols, keyName) => {
+      if (cols.length <= 1) return;
+      const colSet = cols
+        .sort((a, b) => a.Seq_in_index - b.Seq_in_index)
+        .map(c => c.Column_name)
+        .join(',');
+      if (!compoundGroups.has(colSet)) compoundGroups.set(colSet, []);
+      compoundGroups.get(colSet).push(keyName);
+    });
+
+    for (const [, keyNames] of compoundGroups) {
+      if (keyNames.length <= 1) continue;
+      keyNames.sort((a, b) => {
+        const aHas = /_\d+$/.test(a);
+        const bHas = /_\d+$/.test(b);
+        if (aHas && !bHas) return 1;
+        if (!aHas && bHas) return -1;
+        return a.length - b.length;
+      });
+      for (const name of keyNames.slice(1)) {
+        try {
+          await sequelize.query(`DROP INDEX \`${name}\` ON \`${table}\``);
+          totalDropped++;
+        } catch (_) {
+          // 忽略删除失败
+        }
+      }
+    }
+  }
+
+  console.log(`    重复索引清理完成，共删除 ${totalDropped} 个`);
+}
+
+// ==================== warehouseId 外键清理（原 drop-device-warehouse-fk.js） ====================
+
+/**
+ * 删除 devices 表上引用 warehouses.warehouseId 的外键约束
+ * 业务背景：warehouseId 设计为自由输入文本字段，不应该有外键约束
+ * 仅 MySQL 需要执行（SQLite 没有显式外键约束由 Sequelize 管理）
+ */
+async function migrateDropWarehouseFK() {
+  const dialect = sequelize.getDialect();
+
+  if (dialect !== 'mysql' && dialect !== 'mariadb') {
+    console.log('    非 MySQL 数据库，跳过 warehouseId 外键清理');
+    return;
+  }
+
+  // 查询所有引用 warehouses 表的外键约束
+  const [constraints] = await sequelize.query(
+    `SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME
+     FROM information_schema.KEY_COLUMN_USAGE
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'devices'
+       AND REFERENCED_TABLE_NAME = 'warehouses'
+       AND REFERENCED_COLUMN_NAME = 'warehouseId'`
+  );
+
+  if (constraints.length === 0) {
+    console.log('    devices.warehouseId 上无外键约束，跳过');
+    return;
+  }
+
+  console.log(`    发现 ${constraints.length} 个外键约束待清理`);
+
+  for (const c of constraints) {
+    try {
+      await sequelize.query(`ALTER TABLE devices DROP FOREIGN KEY \`${c.CONSTRAINT_NAME}\``);
+      console.log(`    已删除外键: ${c.CONSTRAINT_NAME}`);
+    } catch (err) {
+      console.log(`    删除外键 ${c.CONSTRAINT_NAME} 失败: ${err.message}`);
+    }
+  }
+
+  console.log('    warehouseId 外键清理完成');
 }
 
 // 执行迁移

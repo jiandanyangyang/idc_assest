@@ -28,6 +28,7 @@ import {
   Divider,
   Pagination,
   Segmented,
+  Tabs,
 } from 'antd';
 import {
   PlusOutlined,
@@ -75,6 +76,8 @@ import BatchImportModal from '../components/BatchImportModal';
 import PortAddGuideModal from '../components/PortAddGuideModal';
 import ServerNicCard from '../components/ServerNicCard';
 import PortExportModal from '../components/PortExportModal';
+import PortDiscoveryModal from '../components/PortDiscoveryModal';
+import DevicePortCard from '../components/DevicePortCard';
 import { designTokens } from '../config/theme';
 import CloseButton from '../components/CloseButton';
 import { debounce } from '../utils/common';
@@ -111,6 +114,14 @@ const animations = {
   },
 };
 
+// 设备类型筛选 Tab 配置（对应后端 deviceType 参数：all/server/switch/other）
+const LIST_TYPE_TAB_ITEMS = [
+  { key: 'all', label: '全部' },
+  { key: 'server', label: '服务器' },
+  { key: 'switch', label: '网络设备' },
+  { key: 'other', label: '其他' },
+];
+
 /**
  * 按端口名称中的数字段进行自然排序
  * @param {Array} ports - 端口数组
@@ -132,6 +143,92 @@ function sortPortsByName(ports) {
     return String(a.portName).localeCompare(String(b.portName));
   });
 }
+
+/** 获取设备类型分类：server 为服务器，switch 涵盖所有网络设备（交换机/路由器/防火墙/存储等） */
+const getDeviceType = device => {
+  if (!device?.type) return 'unknown';
+  const type = device.type.toLowerCase();
+  if (type.includes('server')) return 'server';
+  // 交换机、路由器、防火墙、存储等网络设备归为一类
+  if (
+    type.includes('switch') ||
+    type.includes('router') ||
+    type.includes('firewall') ||
+    type.includes('storage') ||
+    type.includes('loadbalancer')
+  ) {
+    return 'switch';
+  }
+  return 'other';
+};
+
+// 自定义类型（other）与网络设备一致，均无需关联网卡
+const isSwitchDevice = device => {
+  const t = getDeviceType(device);
+  return t === 'switch' || t === 'other';
+};
+
+const isServerDevice = device => getDeviceType(device) === 'server';
+
+/** 根据设备原始类型获取中文名标签 */
+const getDeviceTypeLabel = device => {
+  if (!device?.type) return '设备';
+  const type = device.type.toLowerCase();
+  if (type.includes('server')) return '服务器';
+  if (type.includes('switch')) return '交换机';
+  if (type.includes('router')) return '路由器';
+  if (type.includes('firewall')) return '防火墙';
+  if (type.includes('storage')) return '存储设备';
+  if (type.includes('loadbalancer')) return '负载均衡';
+  // 自定义类型直接展示原始值（如"无线控制器"）
+  return device.type;
+};
+
+// 获取设备图标
+const getDeviceIcon = device => {
+  if (!device?.type) return <AppstoreOutlined />;
+  const type = device.type.toLowerCase();
+  if (type.includes('server')) return <CloudServerOutlined />;
+  if (type.includes('switch')) return <PartitionOutlined />;
+  if (type.includes('router')) return <GatewayOutlined />;
+  if (type.includes('firewall')) return <SafetyOutlined />;
+  if (type.includes('storage')) return <HddOutlined />;
+  if (type.includes('loadbalancer')) return <SwapOutlined />;
+  // 自定义类型（无线控制器、上网行为管理等）统一用节点设备图标，与交换机区分
+  return <DeploymentUnitOutlined />;
+};
+
+/**
+ * 按设备原始类型返回图标背景渐变与阴影色
+ * @param {Object} device - 设备对象
+ * @returns {{ gradient: string, shadow: string }} 背景渐变与阴影色
+ */
+const getDeviceIconStyle = device => {
+  if (!device?.type) return { gradient: 'linear-gradient(135deg, #64748b 0%, #475569 100%)', shadow: 'rgba(100, 116, 139, 0.3)' };
+  const type = device.type.toLowerCase();
+  if (type.includes('server')) return { gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', shadow: 'rgba(102, 126, 234, 0.3)' };
+  if (type.includes('switch')) return { gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)', shadow: 'rgba(17, 153, 142, 0.3)' };
+  if (type.includes('router')) return { gradient: 'linear-gradient(135deg, #f59e0b 0%, #f97316 100%)', shadow: 'rgba(245, 158, 11, 0.3)' };
+  if (type.includes('firewall')) return { gradient: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', shadow: 'rgba(239, 68, 68, 0.3)' };
+  if (type.includes('storage')) return { gradient: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', shadow: 'rgba(139, 92, 246, 0.3)' };
+  if (type.includes('loadbalancer')) return { gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', shadow: 'rgba(59, 130, 246, 0.3)' };
+  // 自定义类型用粉红渐变（色彩饱满，避免灰色辨识度不足）
+  return { gradient: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)', shadow: 'rgba(236, 72, 153, 0.3)' };
+};
+
+/** 将设备状态值映射为带颜色的中文文本 */
+const getDeviceStatusTag = status => {
+  const config = STATUS_MAP[status];
+  if (!config) return null;
+  return (
+    <Tag
+      color={config.color}
+      style={{ marginLeft: '4px', marginInlineEnd: 0, borderRadius: '4px', padding: '0 8px' }}
+    >
+      {config.text}
+    </Tag>
+  );
+};
 
 function PortManagement() {
   // 端口/速率/线缆类型选项（来自 /api/port-options，集中维护）
@@ -173,6 +270,7 @@ function PortManagement() {
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [networkCardImportModalVisible, setNetworkCardImportModalVisible] = useState(false);
   const [batchImportModalVisible, setBatchImportModalVisible] = useState(false);
+  const [discoveryModal, setDiscoveryModal] = useState({ visible: false, deviceId: null, deviceName: null });
   const [portAddGuideModalVisible, setPortAddGuideModalVisible] = useState(false);
   const [portExportModalVisible, setPortExportModalVisible] = useState(false);
   const [importDeviceType, setImportDeviceType] = useState(null);
@@ -188,9 +286,6 @@ function PortManagement() {
   const [previewPorts, setPreviewPorts] = useState([]);
   const [showPreview, setShowPreview] = useState(false);
 
-  // 批量选择相关状态
-  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
-
   // 设备选择弹窗 Tab 状态
   const [deviceFilterType, setDeviceFilterType] = useState('all');
   const [guidedDeviceType, setGuidedDeviceType] = useState(null);
@@ -201,6 +296,15 @@ function PortManagement() {
   const [rackList, setRackList] = useState([]);
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [selectedRackId, setSelectedRackId] = useState(null);
+
+  // 设备类型筛选状态（all/server/switch/other，联动后端 deviceType 查询参数）
+  const [listTypeFilter, setListTypeFilter] = useState('all');
+
+  // 端口状态筛选状态（with=有端口/without=无端口/all=全部，联动后端 hasPorts 查询参数）
+  const [portStatusFilter, setPortStatusFilter] = useState('with');
+
+  // 设备选择弹窗模式（addPort=新增端口选设备 / collect=自动采集端口选设备）
+  const [deviceSelectMode, setDeviceSelectMode] = useState('addPort');
 
   const loadMoreRef = useRef(null);
   const hasMoreRef = useRef(true);
@@ -269,6 +373,27 @@ function PortManagement() {
     }));
   }, []);
 
+  /**
+   * 设备类型 Tab 切换处理：仅重置状态，列表请求由 useEffect 依赖变化自动触发
+   * @param {string} key - Tab 键名（all/server/switch/other）
+   */
+  const handleListTypeChange = useCallback(key => {
+    setListTypeFilter(key);
+    setDeviceCardPage(1);
+    setExpandedKeys([]);
+  }, []);
+
+  /**
+   * 端口状态筛选切换处理：仅重置状态，列表请求由 useEffect 依赖变化自动触发
+   * 注意：与设备类型 Tab 相互独立可叠加，互不清空
+   * @param {string} value - 端口状态键名（with/without/all）
+   */
+  const handlePortStatusChange = useCallback(value => {
+    setPortStatusFilter(value);
+    setDeviceCardPage(1);
+    setExpandedKeys([]);
+  }, []);
+
   // 按设备分组获取端口（设备维度分页，避免端口数过多时部分设备不显示）
   const fetchPorts = useCallback(
     async (page = 1) => {
@@ -282,6 +407,10 @@ function PortManagement() {
         if (filters.deviceId) params.deviceId = filters.deviceId;
         if (filters.roomId) params.roomId = filters.roomId;
         if (filters.rackId) params.rackId = filters.rackId;
+        // 设备类型过滤（all 时不传，由后端默认不过滤）
+        if (listTypeFilter && listTypeFilter !== 'all') params.deviceType = listTypeFilter;
+        // 端口状态过滤（with 为后端默认，不传；without=仅无端口设备 / all=全部设备）
+        if (portStatusFilter && portStatusFilter !== 'with') params.hasPorts = portStatusFilter;
 
         const response = await api.get('/device-ports/grouped', { params });
         const groups = response.groups || [];
@@ -306,7 +435,7 @@ function PortManagement() {
         setLoading(false);
       }
     },
-    [filters, deviceCardPageSize]
+    [filters, deviceCardPageSize, listTypeFilter, portStatusFilter]
   );
 
   const fetchDevices = useCallback(async (keyword = '') => {
@@ -335,11 +464,16 @@ function PortManagement() {
     [fetchDevices]
   );
 
+  // 初始加载设备列表与机房机柜筛选项（两者依赖稳定，仅挂载时执行一次）
   useEffect(() => {
-    fetchPorts(1);
     fetchDevices();
     loadFilterRoomsAndRacks();
-  }, [fetchPorts, fetchDevices, loadFilterRoomsAndRacks]);
+  }, [fetchDevices, loadFilterRoomsAndRacks]);
+
+  // 筛选条件或设备类型 Tab 变化时（fetchPorts 身份变化）重新请求端口列表
+  useEffect(() => {
+    fetchPorts(1);
+  }, [fetchPorts]);
 
   const handleSearch = useCallback(() => {
     setDeviceCardPage(1);
@@ -374,6 +508,23 @@ function PortManagement() {
       setDeviceFilterType('server');
     }
     setDevicePage(1);
+    // 新增端口流程：设备选择弹窗进入 addPort 模式（选中后走原新增端口逻辑）
+    setDeviceSelectMode('addPort');
+    setSelectDeviceModalVisible(true);
+  };
+
+  /**
+   * 打开自动采集端口的设备选择弹窗（collect 模式）
+   * 仅网络设备（交换机/路由器/防火墙/存储/负载均衡）可被选中，选中后直接进入采集弹窗
+   */
+  const handleOpenCollectDiscovery = () => {
+    setDeviceSelectMode('collect');
+    setGuidedDeviceType(null);
+    // collect 模式下仅保留网络设备 Tab
+    setDeviceFilterType('switch');
+    setDevicePage(1);
+    fetchDevices();
+    fetchRoomsAndRacks();
     setSelectDeviceModalVisible(true);
   };
 
@@ -416,6 +567,12 @@ function PortManagement() {
     setSelectDeviceModalVisible(false);
     if (!device) return;
 
+    // 自动采集模式：直接打开端口采集弹窗，不进入新增端口流程
+    if (deviceSelectMode === 'collect') {
+      setDiscoveryModal({ visible: true, deviceId: device.deviceId, deviceName: device.name });
+      return;
+    }
+
     const deviceType = getDeviceType(device);
 
     if (deviceType === 'server') {
@@ -456,51 +613,63 @@ function PortManagement() {
     }
   };
 
-  const handleAddPortForDevice = device => {
-    const deviceType = getDeviceType(device);
-
-    if (deviceType === 'server') {
-      api
-        .get(`/network-cards/device/${device.deviceId}`)
-        .then(nicList => {
-          const validNicList = Array.isArray(nicList) ? nicList : [];
-          if (validNicList.length === 0) {
-            message.warning({
-              content: '该服务器尚未添加网卡，请先在网卡管理中添加网卡',
-              icon: (
-                <ExclamationCircleOutlined style={{ color: designTokens.colors.warning.main }} />
-              ),
-              duration: 3,
-            });
-            handleManageNetworkCards(device);
-          } else {
-            setNicList(validNicList);
-            setSelectedDeviceForPort(device);
-            form.resetFields();
-            form.setFieldsValue({ deviceId: device.deviceId });
-            setModalVisible(true);
-          }
-        })
-        .catch(() => {
-          message.warning({
-            content: '该服务器尚未添加网卡，请先在网卡管理中添加网卡',
-            icon: <ExclamationCircleOutlined style={{ color: designTokens.colors.warning.main }} />,
-            duration: 3,
-          });
-          handleManageNetworkCards(device);
-        });
-    } else {
-      setSelectedDeviceForPort(device);
-      form.resetFields();
-      form.setFieldsValue({ deviceId: device.deviceId });
-      setModalVisible(true);
-    }
-  };
-
-  const handleManageNetworkCards = device => {
+  /**
+   * 打开网卡管理弹窗（卡片回调，useCallback 保持引用稳定）
+   * @param {Object} device - 设备对象
+   */
+  const handleManageNetworkCards = useCallback(device => {
     setSelectedDeviceForNic(device);
     setNetworkCardModalVisible(true);
-  };
+  }, []);
+
+  /**
+   * 为指定设备新增端口（卡片回调，useCallback 保持引用稳定）
+   * 服务器设备需先检查网卡，无网卡时引导进入网卡管理
+   * @param {Object} device - 设备对象
+   */
+  const handleAddPortForDevice = useCallback(
+    device => {
+      const deviceType = getDeviceType(device);
+
+      if (deviceType === 'server') {
+        api
+          .get(`/network-cards/device/${device.deviceId}`)
+          .then(nicList => {
+            const validNicList = Array.isArray(nicList) ? nicList : [];
+            if (validNicList.length === 0) {
+              message.warning({
+                content: '该服务器尚未添加网卡，请先在网卡管理中添加网卡',
+                icon: (
+                  <ExclamationCircleOutlined style={{ color: designTokens.colors.warning.main }} />
+                ),
+                duration: 3,
+              });
+              handleManageNetworkCards(device);
+            } else {
+              setNicList(validNicList);
+              setSelectedDeviceForPort(device);
+              form.resetFields();
+              form.setFieldsValue({ deviceId: device.deviceId });
+              setModalVisible(true);
+            }
+          })
+          .catch(() => {
+            message.warning({
+              content: '该服务器尚未添加网卡，请先在网卡管理中添加网卡',
+              icon: <ExclamationCircleOutlined style={{ color: designTokens.colors.warning.main }} />,
+              duration: 3,
+            });
+            handleManageNetworkCards(device);
+          });
+      } else {
+        setSelectedDeviceForPort(device);
+        form.resetFields();
+        form.setFieldsValue({ deviceId: device.deviceId });
+        setModalVisible(true);
+      }
+    },
+    [form, handleManageNetworkCards]
+  );
 
   const handleNicSuccess = () => {
     message.success({
@@ -554,41 +723,74 @@ function PortManagement() {
     });
   };
 
-  const handleBatchDelete = () => {
-    if (selectedRowKeys.length === 0) {
-      message.warning('请先选择要删除的端口');
-      return;
-    }
+  /**
+   * 批量删除指定设备的勾选端口（卡片回调，确认弹窗后调用批量删除接口）
+   * @param {number} deviceId - 设备ID
+   * @param {Array} portIds - 待删除端口ID列表
+   * @returns {Promise} 删除流程完成后 resolve（供卡片清空勾选状态）
+   */
+  const handleBatchDelete = useCallback(
+    (deviceId, portIds) => {
+      if (!portIds || portIds.length === 0) {
+        message.warning('请先选择要删除的端口');
+        return Promise.resolve();
+      }
 
-    Modal.confirm({
-      title: '确认批量删除',
-      content: `确定要删除选中的 ${selectedRowKeys.length} 个端口吗？此操作不可恢复！`,
-      okText: '删除',
-      okType: 'danger',
-      cancelText: '取消',
-      onOk: async () => {
-        try {
-          const result = await api.post('/device-ports/batch-delete', {
-            portIds: selectedRowKeys,
-          });
-          message.success({
-            content: `成功删除 ${selectedRowKeys.length} 个端口`,
-            icon: <CheckCircleOutlined style={{ color: designTokens.colors.success.main }} />,
-          });
-          setSelectedRowKeys([]);
-          fetchPorts(1);
-        } catch (error) {
-          const errorMsg = error.response?.data?.error || '';
-          if (errorMsg.includes('关联的接线记录')) {
-            message.error('部分端口存在关联的接线记录，请先删除关联的接线');
-          } else {
-            message.error('批量删除失败');
-          }
-          console.error('批量删除失败:', error);
-        }
-      },
+      // 包装为 Promise：确认并执行完成后 resolve，取消则保持 pending（卡片勾选不清空）
+      return new Promise(resolve => {
+        Modal.confirm({
+          title: '确认批量删除',
+          content: `确定要删除选中的 ${portIds.length} 个端口吗？此操作不可恢复！`,
+          okText: '删除',
+          okType: 'danger',
+          cancelText: '取消',
+          onOk: async () => {
+            try {
+              await api.post('/device-ports/batch-delete', { portIds });
+              message.success({
+                content: `成功删除 ${portIds.length} 个端口`,
+                icon: <CheckCircleOutlined style={{ color: designTokens.colors.success.main }} />,
+              });
+              fetchPorts(deviceCardPage);
+            } catch (error) {
+              const errorMsg = error.response?.data?.error || '';
+              if (errorMsg.includes('关联的接线记录')) {
+                message.error('部分端口存在关联的接线记录，请先删除关联的接线');
+              } else {
+                message.error('批量删除失败');
+              }
+              console.error('批量删除失败:', error);
+            } finally {
+              resolve();
+            }
+          },
+        });
+      });
+    },
+    [fetchPorts, deviceCardPage]
+  );
+
+  /**
+   * 切换设备卡片展开/收起状态（卡片回调，useCallback 保持引用稳定）
+   * @param {number} deviceId - 设备ID
+   */
+  const handleCardToggleExpand = useCallback(deviceId => {
+    setExpandedKeys(prev =>
+      prev.includes(deviceId) ? prev.filter(key => key !== deviceId) : [...prev, deviceId]
+    );
+  }, []);
+
+  /**
+   * 打开自动采集端口弹窗（卡片回调，useCallback 保持引用稳定）
+   * @param {Object} device - 设备对象
+   */
+  const handleCardCollect = useCallback(device => {
+    setDiscoveryModal({
+      visible: true,
+      deviceId: device.deviceId,
+      deviceName: device.name,
     });
-  };
+  }, []);
 
   /**
    * 从端口名中提取前缀和末尾数字
@@ -826,7 +1028,7 @@ function PortManagement() {
       setShowPreview(false);
       fetchPorts(1);
     } catch (error) {
-      message.error(error.response?.data?.error || editingPort ? '更新失败' : '创建失败');
+      message.error(error.response?.data?.error || (editingPort ? '更新失败' : '创建失败'));
       console.error('提交失败:', error);
     }
   };
@@ -1583,91 +1785,6 @@ function PortManagement() {
     []
   );
 
-  // 获取设备图标
-  const getDeviceIcon = device => {
-    if (!device?.type) return <AppstoreOutlined />;
-    const type = device.type.toLowerCase();
-    if (type.includes('server')) return <CloudServerOutlined />;
-    if (type.includes('switch')) return <PartitionOutlined />;
-    if (type.includes('router')) return <GatewayOutlined />;
-    if (type.includes('firewall')) return <SafetyOutlined />;
-    if (type.includes('storage')) return <HddOutlined />;
-    if (type.includes('loadbalancer')) return <SwapOutlined />;
-    // 自定义类型（无线控制器、上网行为管理等）统一用节点设备图标，与交换机区分
-    return <DeploymentUnitOutlined />;
-  };
-
-  /**
-   * 按设备原始类型返回图标背景渐变与阴影色
-   * @param {Object} device - 设备对象
-   * @returns {{ gradient: string, shadow: string }} 背景渐变与阴影色
-   */
-  const getDeviceIconStyle = device => {
-    if (!device?.type) return { gradient: 'linear-gradient(135deg, #64748b 0%, #475569 100%)', shadow: 'rgba(100, 116, 139, 0.3)' };
-    const type = device.type.toLowerCase();
-    if (type.includes('server')) return { gradient: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', shadow: 'rgba(102, 126, 234, 0.3)' };
-    if (type.includes('switch')) return { gradient: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)', shadow: 'rgba(17, 153, 142, 0.3)' };
-    if (type.includes('router')) return { gradient: 'linear-gradient(135deg, #f59e0b 0%, #f97316 100%)', shadow: 'rgba(245, 158, 11, 0.3)' };
-    if (type.includes('firewall')) return { gradient: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)', shadow: 'rgba(239, 68, 68, 0.3)' };
-    if (type.includes('storage')) return { gradient: 'linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%)', shadow: 'rgba(139, 92, 246, 0.3)' };
-    if (type.includes('loadbalancer')) return { gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)', shadow: 'rgba(59, 130, 246, 0.3)' };
-    // 自定义类型用粉红渐变（色彩饱满，避免灰色辨识度不足）
-    return { gradient: 'linear-gradient(135deg, #ec4899 0%, #db2777 100%)', shadow: 'rgba(236, 72, 153, 0.3)' };
-  };
-
-  /** 获取设备类型分类：server 为服务器，switch 涵盖所有网络设备（交换机/路由器/防火墙/存储等） */
-  const getDeviceType = device => {
-    if (!device?.type) return 'unknown';
-    const type = device.type.toLowerCase();
-    if (type.includes('server')) return 'server';
-    // 交换机、路由器、防火墙、存储等网络设备归为一类
-    if (
-      type.includes('switch') ||
-      type.includes('router') ||
-      type.includes('firewall') ||
-      type.includes('storage') ||
-      type.includes('loadbalancer')
-    ) {
-      return 'switch';
-    }
-    return 'other';
-  };
-
-  // 自定义类型（other）与网络设备一致，均无需关联网卡
-  const isSwitchDevice = device => {
-    const t = getDeviceType(device);
-    return t === 'switch' || t === 'other';
-  };
-  const isServerDevice = device => getDeviceType(device) === 'server';
-
-  /** 根据设备原始类型获取中文名标签 */
-  const getDeviceTypeLabel = device => {
-    if (!device?.type) return '设备';
-    const type = device.type.toLowerCase();
-    if (type.includes('server')) return '服务器';
-    if (type.includes('switch')) return '交换机';
-    if (type.includes('router')) return '路由器';
-    if (type.includes('firewall')) return '防火墙';
-    if (type.includes('storage')) return '存储设备';
-    if (type.includes('loadbalancer')) return '负载均衡';
-    // 自定义类型直接展示原始值（如"无线控制器"）
-    return device.type;
-  };
-
-  /** 将设备状态值映射为带颜色的中文文本 */
-  const getDeviceStatusTag = status => {
-    const config = STATUS_MAP[status];
-    if (!config) return null;
-    return (
-      <Tag
-        color={config.color}
-        style={{ marginLeft: '4px', marginInlineEnd: 0, borderRadius: '4px', padding: '0 8px' }}
-      >
-        {config.text}
-      </Tag>
-    );
-  };
-
   // 过滤后的设备列表（带分页）
   const paginatedDevices = useMemo(() => {
     const rackRoomMap = {};
@@ -1679,6 +1796,8 @@ function PortManagement() {
       const type = getDeviceType(d);
       // 仅排除无类型设备，允许自定义类型（other）进入端口管理
       if (type === 'unknown') return false;
+      // 自动采集模式：仅展示归一化为网络设备的设备（交换机/路由器/防火墙/存储/负载均衡）
+      if (deviceSelectMode === 'collect' && type !== 'switch') return false;
       if (selectedRackId && d.rackId !== selectedRackId) return false;
       if (selectedRoomId && d.rackId && rackRoomMap[d.rackId] !== selectedRoomId) return false;
       // 子类型过滤：根据设备原始类型精确匹配
@@ -1715,7 +1834,7 @@ function PortManagement() {
       total: filtered.length,
       hasMore,
     };
-  }, [devices, deviceFilterType, devicePage, guidedDeviceType, rackList, selectedRoomId, selectedRackId]);
+  }, [devices, deviceFilterType, devicePage, guidedDeviceType, deviceSelectMode, rackList, selectedRoomId, selectedRackId]);
 
   useEffect(() => {
     if (!loadMoreRef.current) return;
@@ -1799,7 +1918,7 @@ function PortManagement() {
               bodyStyle={{ padding: '16px' }}
             >
               <Row gutter={[16, 16]} align="bottom">
-                <Col xs={24} sm={12} md={8} lg={6}>
+                <Col xs={24} sm={12} md={8} lg={5}>
                   <div
                     style={{
                       marginBottom: '6px',
@@ -1825,7 +1944,7 @@ function PortManagement() {
                   </Select>
                 </Col>
 
-                <Col xs={24} sm={12} md={8} lg={6}>
+                <Col xs={24} sm={12} md={8} lg={5}>
                   <div
                     style={{
                       marginBottom: '6px',
@@ -1854,7 +1973,7 @@ function PortManagement() {
                   </Select>
                 </Col>
 
-                <Col xs={24} sm={12} md={8} lg={6}>
+                <Col xs={24} sm={12} md={8} lg={5}>
                   <div
                     style={{
                       marginBottom: '6px',
@@ -1889,7 +2008,29 @@ function PortManagement() {
                   </Select>
                 </Col>
 
-                <Col xs={24} sm={12} md={24} lg={6}>
+                <Col xs={24} sm={12} md={8} lg={5}>
+                  <div
+                    style={{
+                      marginBottom: '6px',
+                      fontSize: '13px',
+                      color: designTokens.colors.neutral[600],
+                      fontWeight: 500,
+                    }}
+                  >
+                    端口状态
+                  </div>
+                  <Select
+                    value={portStatusFilter}
+                    onChange={handlePortStatusChange}
+                    style={{ width: '100%' }}
+                  >
+                    <Option value="with">有端口</Option>
+                    <Option value="without">无端口</Option>
+                    <Option value="all">全部</Option>
+                  </Select>
+                </Col>
+
+                <Col xs={24} sm={12} md={24} lg={4}>
                   <Space size="small" wrap>
                     <Button
                       type="primary"
@@ -1934,6 +2075,14 @@ function PortManagement() {
                       新增端口
                     </Button>
                     <Button
+                      icon={<ThunderboltOutlined />}
+                      onClick={handleOpenCollectDiscovery}
+                      size="middle"
+                      style={{ borderRadius: designTokens.borderRadius.sm }}
+                    >
+                      自动采集端口
+                    </Button>
+                    <Button
                       icon={<CloudServerOutlined />}
                       onClick={handleManageServerNics}
                       size="middle"
@@ -1971,6 +2120,14 @@ function PortManagement() {
               </Row>
             </Card>
           </div>
+
+          {/* 设备类型筛选 Tabs（位于筛选控件与设备卡片列表之间） */}
+          <Tabs
+            activeKey={listTypeFilter}
+            onChange={handleListTypeChange}
+            items={LIST_TYPE_TAB_ITEMS}
+            style={{ marginBottom: '16px' }}
+          />
 
           {/* 数据展示区域 */}
           {loading ? (
@@ -2019,307 +2176,24 @@ function PortManagement() {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
               {groupedPorts.map((data, index) => {
-                  const device = data.device;
-                  const deviceId = device?.deviceId;
-                  const devicePorts = data.ports || [];
-                  const freeCount = devicePorts.filter(p => p.status === 'free').length;
-                  const occupiedCount = devicePorts.filter(p => p.status === 'occupied').length;
-                  const faultCount = devicePorts.filter(p => p.status === 'fault').length;
-                  const isExpanded = deviceId ? expandedKeys.includes(deviceId) : false;
+                const device = data.device;
+                const deviceId = device?.deviceId;
 
-                  return (
-                    <Card
-                      key={deviceId || index}
-                      style={{
-                        borderRadius: designTokens.borderRadius.lg,
-                        border: `1px solid ${designTokens.colors.neutral[200]}`,
-                        overflow: 'hidden',
-                      }}
-                      bodyStyle={{ padding: 0 }}
-                    >
-                      {/* 设备头部 */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '16px 20px',
-                          background: isExpanded ? designTokens.colors.primary.light : '#fff',
-                          cursor: 'pointer',
-                          transition: 'background 0.2s',
-                        }}
-                        onClick={() => {
-                          if (isExpanded) {
-                            setExpandedKeys(prev => prev.filter(key => key !== deviceId));
-                          } else {
-                            setExpandedKeys(prev => [...prev, deviceId]);
-                          }
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-                          <div
-                            style={{
-                              width: '48px',
-                              height: '48px',
-                              borderRadius: designTokens.borderRadius.md,
-                              background: getDeviceIconStyle(device).gradient,
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              color: '#fff',
-                              fontSize: '24px',
-                              boxShadow: `0 4px 12px ${getDeviceIconStyle(device).shadow}`,
-                            }}
-                          >
-                            {getDeviceIcon(device)}
-                          </div>
-                          <div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span
-                                style={{
-                                  fontWeight: 600,
-                                  fontSize: '16px',
-                                  color: designTokens.colors.neutral[800],
-                                }}
-                              >
-                                {device?.name || '未知设备'}
-                              </span>
-                              <Tag
-                                color={
-                                  isServerDevice(device)
-                                    ? 'blue'
-                                    : isSwitchDevice(device)
-                                      ? 'green'
-                                      : 'default'
-                                }
-                                style={{ marginLeft: '4px' }}
-                              >
-                                {getDeviceTypeLabel(device)}
-                              </Tag>
-                            </div>
-                            <div
-                              style={{
-                                fontSize: '13px',
-                                color: designTokens.colors.neutral[500],
-                                marginTop: '2px',
-                              }}
-                            >
-                              {device?.deviceId || '-'} · {device?.model || device?.type || '设备'}
-                            </div>
-                            {/* 设备扩展信息：机房位置、机柜、U位、IP、SN、状态 */}
-                            <div
-                              style={{
-                                fontSize: '12px',
-                                color: designTokens.colors.neutral[500],
-                                marginTop: '6px',
-                                display: 'flex',
-                                gap: '12px',
-                                flexWrap: 'wrap',
-                                alignItems: 'center',
-                              }}
-                            >
-                              {device?.Rack?.Room?.name && (
-                                <Tooltip title="机房">
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                    <EnvironmentOutlined />
-                                    {device.Rack.Room.name}
-                                  </span>
-                                </Tooltip>
-                              )}
-                              {device?.Rack?.name && (
-                                <Tooltip title="机柜">
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                    <DatabaseOutlined />
-                                    {device.Rack.name}
-                                  </span>
-                                </Tooltip>
-                              )}
-                              {device?.position != null && (
-                                <Tooltip title="U位">
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                    <ColumnHeightOutlined />
-                                    U{device.position}
-                                    {device?.height ? `~${device.position + device.height - 1}` : ''}
-                                  </span>
-                                </Tooltip>
-                              )}
-                              {device?.ipAddress && (
-                                <Tooltip title="IP地址">
-                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                                    <GlobalOutlined />
-                                    {device.ipAddress}
-                                  </span>
-                                </Tooltip>
-                              )}
-                              {device?.serialNumber && (
-                                <Tooltip title="序列号">
-                                  <span
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      maxWidth: '160px',
-                                      overflow: 'hidden',
-                                      textOverflow: 'ellipsis',
-                                      whiteSpace: 'nowrap',
-                                    }}
-                                  >
-                                    <BarcodeOutlined />
-                                    {device.serialNumber}
-                                  </span>
-                                </Tooltip>
-                              )}
-                              {getDeviceStatusTag(device?.status)}
-                            </div>
-                          </div>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <Space size="small">
-                            <Tooltip title="空闲">
-                              <Tag
-                                color="success"
-                                style={{ borderRadius: '4px', padding: '4px 12px' }}
-                                icon={<CheckCircleOutlined />}
-                              >
-                                {freeCount}
-                              </Tag>
-                            </Tooltip>
-                            <Tooltip title="占用">
-                              <Tag
-                                color="processing"
-                                style={{ borderRadius: '4px', padding: '4px 12px' }}
-                                icon={<AppstoreOutlined />}
-                              >
-                                {occupiedCount}
-                              </Tag>
-                            </Tooltip>
-                            {faultCount > 0 && (
-                              <Tooltip title="故障">
-                                <Tag
-                                  color="error"
-                                  style={{ borderRadius: '4px', padding: '4px 12px' }}
-                                  icon={<ExclamationCircleOutlined />}
-                                >
-                                  {faultCount}
-                                </Tag>
-                              </Tooltip>
-                            )}
-                            <Tag
-                              color="blue"
-                              style={{ borderRadius: '4px', padding: '4px 12px', fontWeight: 500 }}
-                            >
-                              总计: {devicePorts.length}
-                            </Tag>
-                          </Space>
-                          <Divider type="vertical" style={{ height: '24px', margin: '0 8px' }} />
-                          <Space size="small">
-                            <Tooltip
-                              title={
-                                isServerDevice(device)
-                                  ? '添加端口'
-                                  : '添加端口（交换机端口无需关联网卡）'
-                              }
-                            >
-                              <Button
-                                type="text"
-                                icon={<PlusOutlined />}
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  handleAddPortForDevice(device);
-                                }}
-                                style={{ color: designTokens.colors.primary.main }}
-                              />
-                            </Tooltip>
-                            {isServerDevice(device) && (
-                              <Tooltip title="网卡管理">
-                                <Button
-                                  type="text"
-                                  icon={<CloudServerOutlined />}
-                                  onClick={e => {
-                                    e.stopPropagation();
-                                    handleManageNetworkCards(device);
-                                  }}
-                                  style={{ color: designTokens.colors.primary.main }}
-                                />
-                              </Tooltip>
-                            )}
-                            <Button
-                              type="text"
-                              size="small"
-                              icon={isExpanded ? <UpOutlined /> : <DownOutlined />}
-                              style={{ color: designTokens.colors.neutral[600], minWidth: '70px' }}
-                            >
-                              {isExpanded ? '收起' : '展开'}
-                            </Button>
-                          </Space>
-                        </div>
-                      </div>
-
-                      {/* 端口列表 */}
-                      {isExpanded && (
-                        <div
-                          style={{
-                            padding: '16px 20px',
-                            borderTop: `1px solid ${designTokens.colors.neutral[200]}`,
-                          }}
-                        >
-                          {devicePorts.length > 0 ? (
-                            <div>
-                              {selectedRowKeys.length > 0 && (
-                                <div
-                                  style={{
-                                    marginBottom: '12px',
-                                    padding: '8px 12px',
-                                    background: designTokens.colors.error.bg,
-                                    borderRadius: designTokens.borderRadius.sm,
-                                    display: 'flex',
-                                    justifyContent: 'space-between',
-                                    alignItems: 'center',
-                                  }}
-                                >
-                                  <Text type="secondary">
-                                    已选择 {selectedRowKeys.length} 个端口
-                                  </Text>
-                                  <Button
-                                    danger
-                                    size="small"
-                                    icon={<DeleteOutlined />}
-                                    onClick={handleBatchDelete}
-                                  >
-                                    批量删除
-                                  </Button>
-                                </div>
-                              )}
-                              <Table
-                                columns={
-                                  isServerDevice(device)
-                                    ? portColumns
-                                    : portColumns.filter(col => col.key !== 'networkCard')
-                                }
-                                dataSource={devicePorts}
-                                rowKey="portId"
-                                rowSelection={{
-                                  selectedRowKeys,
-                                  onChange: setSelectedRowKeys,
-                                }}
-                                pagination={{
-                                  defaultPageSize: 10,
-                                  showSizeChanger: true,
-                                  showTotal: total => `共 ${total} 个端口`,
-                                  pageSizeOptions: ['10', '20', '50', '100'],
-                                }}
-                                size="middle"
-                                scroll={{ x: 1000 }}
-                              />
-                            </div>
-                          ) : (
-                            <Empty description="暂无端口数据" style={{ padding: '24px 0' }} />
-                          )}
-                        </div>
-                      )}
-                    </Card>
-                  );
-                })}
+                return (
+                  <DevicePortCard
+                    key={deviceId || index}
+                    device={device}
+                    ports={data.ports || []}
+                    expanded={deviceId ? expandedKeys.includes(deviceId) : false}
+                    onToggleExpand={handleCardToggleExpand}
+                    onCollect={handleCardCollect}
+                    onAddPort={handleAddPortForDevice}
+                    onManageNic={handleManageNetworkCards}
+                    onBatchDelete={handleBatchDelete}
+                    portColumns={portColumns}
+                  />
+                );
+              })}
               {deviceCardTotal > deviceCardPageSize && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '16px 0' }}>
                   <Pagination
@@ -3465,10 +3339,12 @@ function PortManagement() {
             </div>
             <div>
               <div style={{ fontSize: '18px', fontWeight: 600, color: '#1a1a2e', lineHeight: 1.3 }}>
-                选择设备
+                {deviceSelectMode === 'collect' ? '选择网络设备自动采集端口' : '选择设备'}
               </div>
               <div style={{ fontSize: '12px', color: '#666', marginTop: '2px' }}>
-                为端口选择所属设备
+                {deviceSelectMode === 'collect'
+                  ? '仅可选择网络设备，选中后自动采集端口'
+                  : '为端口选择所属设备'}
               </div>
             </div>
           </div>
@@ -3479,7 +3355,6 @@ function PortManagement() {
           setSelectDeviceModalVisible(false);
           setDeviceFilterType('all');
           setDevicePage(1);
-          setSelectedRowKeys([]);
           setGuidedDeviceType(null);
           setSelectedRoomId(null);
           setSelectedRackId(null);
@@ -3593,6 +3468,12 @@ function PortManagement() {
 
           // 根据引导类型动态配置 Tab
           const tabConfigs = (() => {
+            // 自动采集模式：仅网络设备可参与采集，隐藏其他 Tab
+            if (deviceSelectMode === 'collect') {
+              return [
+                { key: 'switch', label: '网络设备' },
+              ];
+            }
             if (guidedDeviceType === 'switch') {
               // 网络设备端口 → 显示网络设备子类型 + 其他（自定义类型）
               return [
@@ -3620,6 +3501,10 @@ function PortManagement() {
           const getTabCount = key => {
             if (key === 'server') return allDevices.filter(d => getDeviceType(d) === 'server').length;
             if (key === 'other') return allDevices.filter(d => getDeviceType(d) === 'other').length;
+            // 自动采集模式：网络设备 Tab 按归一化类型统计（含路由器/防火墙/存储等）
+            if (deviceSelectMode === 'collect' && key === 'switch') {
+              return allDevices.filter(d => getDeviceType(d) === 'switch').length;
+            }
             // 子类型按原始 type 匹配
             return allDevices.filter(d => {
               const rawType = (d.type || '').toLowerCase();
@@ -4193,6 +4078,22 @@ function PortManagement() {
         }}
       />
 
+      {/* 端口自动采集弹窗 */}
+      <PortDiscoveryModal
+        open={discoveryModal.visible}
+        onClose={(applied) => {
+          setDiscoveryModal({ visible: false, deviceId: null, deviceName: null });
+          if (applied) {
+            setRefreshTrigger(prev => prev + 1);
+            fetchDevices();
+            // 落库后重新拉取端口分组列表，展示新增/变更/移除结果（保持当前设备卡片页）
+            fetchPorts(deviceCardPage);
+          }
+        }}
+        deviceId={discoveryModal.deviceId}
+        deviceName={discoveryModal.deviceName}
+      />
+
       {/* 网卡批量导入弹窗 */}
       <NetworkCardImportModal
         visible={networkCardImportModalVisible}
@@ -4228,7 +4129,6 @@ function PortManagement() {
         filters={filters}
         totalCount={portTotal}
         currentPageCount={ports.length}
-        selectedCount={selectedRowKeys.length}
         onExport={handleExport}
         onCancel={() => setPortExportModalVisible(false)}
       />

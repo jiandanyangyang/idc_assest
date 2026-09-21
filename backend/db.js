@@ -24,6 +24,8 @@ if (DB_TYPE === 'mysql') {
       host: process.env.MYSQL_HOST || 'localhost',
       port: parseInt(process.env.MYSQL_PORT) || 3306,
       dialect: 'mysql',
+      charset: 'utf8mb4',
+      collate: 'utf8mb4_0900_ai_ci',
       logging: sqlLogger,
       // 连接池配置 - 提升并发处理能力
       pool: {

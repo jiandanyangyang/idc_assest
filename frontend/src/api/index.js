@@ -245,6 +245,23 @@ export const deviceAPI = {
   exportDevices: params => api.get('/devices/export', { params, responseType: 'blob' }),
 };
 
+/**
+ * 通用图片附件 API
+ * entity: 'devices' | 'consumables'（与后端 ENTITY_CONFIG 对应）
+ */
+export const imageAPI = {
+  upload: (entity, id, file) => {
+    const formData = new FormData();
+    formData.append('entity', entity);
+    formData.append('id', id);
+    formData.append('image', file);
+    return api.post('/images', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  remove: (entity, id, url) => api.delete('/images', { data: { entity, id, url } }),
+};
+
 export const ticketAPI = {
   list: params => api.get('/tickets', { params }),
   get: ticketId => api.get(`/tickets/${ticketId}`),
@@ -324,6 +341,35 @@ export const topologyAPI = {
   saveLayout: (data) => api.post('/topology/layout', data).then(r => r.data),
   // 删除布局(重置为自动布局)
   deleteLayout: (layoutKey) => api.delete(`/topology/layout/${layoutKey}`).then(r => r.data),
+};
+
+/**
+ * 设备采集凭据 API
+ * 用于管理设备 SSH/SNMP/API 凭据（加密存储）
+ * 注意：返回完整响应体 { success, data, message, ... }，调用方用 res.success 判断成败、
+ * 用 res.data 取数据。与 ticketAPI / deviceAPI 等风格保持一致。
+ * （此前每个方法尾部链了 .then(r => r.data) 把外层 { success, data } 解包成 data 值，
+ *  导致组件 res.success 恒为 undefined 误判为失败、delete/test 直接 TypeError、list 永远空。）
+ */
+export const deviceCredentialAPI = {
+  list: (params) => api.get('/device-credentials', { params }),
+  create: (data) => api.post('/device-credentials', data),
+  update: (id, data) => api.put(`/device-credentials/${id}`, data),
+  delete: (id) => api.delete(`/device-credentials/${id}`),
+  test: (id) => api.post(`/device-credentials/${id}/test`),
+  getRaw: (id) => api.get(`/device-credentials/${id}/raw`),
+};
+
+/**
+ * 端口自动采集 API
+ * discover: 连接设备抓取端口列表并返回差异预览（不写库）
+ * apply:  把差异预览的结果落库（幂等）
+ */
+export const portDiscoveryAPI = {
+  // 注意：axios 响应拦截器已返回后端 body（{ success, vendor, diff, stats, ... }），
+  // 这里不能再链 .then(r => r.data)，否则 body 无 data 字段会得到 undefined
+  discover: (data) => api.post('/port-discovery/discover', data),
+  apply: (data) => api.post('/port-discovery/apply', data),
 };
 
 export default api;

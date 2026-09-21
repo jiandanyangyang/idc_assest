@@ -68,6 +68,7 @@ import {
   SettingOutlined,
   InboxOutlined,
   UserOutlined,
+  PictureOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import * as XLSX from 'xlsx';
@@ -75,6 +76,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { designTokens } from '../config/theme';
 import CloseButton from '../components/CloseButton';
 import ConsumableTimelineModal from '../components/ConsumableTimelineModal';
+import ImageUploader from '../components/common/ImageUploader';
+import ImageManagerModal from '../components/common/ImageManagerModal';
+import { imageAPI } from '../api';
 import {
   inputStyles,
   selectStyles,
@@ -121,6 +125,9 @@ function ConsumableManagement() {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingConsumable, setEditingConsumable] = useState(null);
   const [form] = Form.useForm();
+  // 耗材图片：images 为服务端已存图片（编辑态），pendingImages 为新增时暂存待上传文件
+  const [images, setImages] = useState([]);
+  const [pendingImages, setPendingImages] = useState([]);
   const [categories, setCategories] = useState([]);
   const [pagination, setPagination] = useState({
     current: 1,
@@ -200,6 +207,8 @@ function ConsumableManagement() {
   const importProgressRef = React.useRef(null);
   const [timelineModalVisible, setTimelineModalVisible] = useState(false);
   const [selectedConsumable, setSelectedConsumable] = useState(null);
+  // 图片管理弹窗：imageModalConsumable 为当前管理图片的耗材（null 表示关闭）
+  const [imageModalConsumable, setImageModalConsumable] = useState(null);
   const [exportModalVisible, setExportModalVisible] = useState(false);
   const [exportMode, setExportMode] = useState('all'); // all/filtered/selected/warning
   const [exportFields, setExportFields] = useState([
@@ -283,6 +292,8 @@ function ConsumableManagement() {
           consumable.maxStock === undefined;
         setMaxStockUnlimited(isUnlimited);
         setSnList(consumable.snList || []);
+        setImages(Array.isArray(consumable.images) ? consumable.images : []);
+        setPendingImages([]);
         form.setFieldsValue({
           ...consumable,
           maxStock: isUnlimited ? undefined : consumable.maxStock,
@@ -290,6 +301,8 @@ function ConsumableManagement() {
       } else {
         setMaxStockUnlimited(true);
         setSnList([]);
+        setImages([]);
+        setPendingImages([]);
         setCreateWithInbound(false);
         setInboundData({ quantity: 1, operator: '', reason: '' });
         setInboundSnList([]);
@@ -309,6 +322,8 @@ function ConsumableManagement() {
   const handleCancel = useCallback(() => {
     setModalVisible(false);
     setEditingConsumable(null);
+    setImages([]);
+    setPendingImages([]);
     setSnList([]);
     setSnInputVisible(false);
     setSnInputValue('');
@@ -331,15 +346,16 @@ function ConsumableManagement() {
             icon: <CheckCircleOutlined style={{ color: designTokens.colors.success.main }} />,
           });
         } else {
+          const newId = `CON${Date.now()}`;
           if (createWithInbound) {
             // 同时入库模式，调用创建并入库接口
             await axios.post('/api/consumables/create-with-inbound', {
               ...submitData,
-              consumableId: `CON${Date.now()}`,
+              consumableId: newId,
               inboundQuantity: inboundData.quantity,
               inboundOperator: inboundData.operator,
               inboundReason: inboundData.reason,
-              inboundSnList: inboundSnList,
+              inboundSnList,
             });
             message.success({
               content: '耗材创建成功并已入库',
@@ -349,17 +365,34 @@ function ConsumableManagement() {
             // 普通创建模式
             await axios.post('/api/consumables', {
               ...submitData,
-              consumableId: `CON${Date.now()}`,
+              consumableId: newId,
             });
             message.success({
               content: '耗材创建成功',
               icon: <CheckCircleOutlined style={{ color: designTokens.colors.success.main }} />,
             });
           }
+          // 新增耗材后，将表单中暂存的图片上传到新耗材
+          if (pendingImages.length > 0) {
+            let ok = 0;
+            for (const file of pendingImages) {
+              try {
+                await imageAPI.upload('consumables', newId, file);
+                ok += 1;
+              } catch (imgErr) {
+                console.error('耗材图片上传失败:', imgErr);
+              }
+            }
+            if (ok < pendingImages.length) {
+              message.warning(`耗材已创建，${pendingImages.length - ok} 张图片上传失败`);
+            }
+          }
         }
         setModalVisible(false);
         fetchConsumables();
         setEditingConsumable(null);
+        setImages([]);
+        setPendingImages([]);
         setSnList([]);
         setCreateWithInbound(false);
         setInboundData({ quantity: 1, operator: '', reason: '' });
@@ -369,7 +402,15 @@ function ConsumableManagement() {
         console.error('提交失败:', error);
       }
     },
-    [editingConsumable, fetchConsumables, maxStockUnlimited, createWithInbound, inboundData, inboundSnList]
+    [
+      editingConsumable,
+      fetchConsumables,
+      maxStockUnlimited,
+      createWithInbound,
+      inboundData,
+      inboundSnList,
+      pendingImages,
+    ]
   );
 
   const handleDelete = useCallback(
@@ -1620,57 +1661,70 @@ function ConsumableManagement() {
       {
         title: '操作',
         key: 'action',
-        width: 240,
+        width: 260,
         fixed: 'right',
-        render: (_, record) => (
-          <Space size="small">
-            <Tooltip title="查看记录">
-              <Button
-                type="text"
-                icon={<HistoryOutlined />}
-                onClick={() => {
-                  setSelectedConsumable(record);
-                  setTimelineModalVisible(true);
-                }}
-                style={{ color: designTokens.colors.info.main }}
-              />
-            </Tooltip>
-            <Tooltip title="编辑">
-              <Button
-                type="text"
-                icon={<EditOutlined />}
-                onClick={() => showModal(record)}
-                style={{ color: designTokens.colors.primary.main }}
-              />
-            </Tooltip>
-            <Tooltip title="入库">
-              <Button
-                type="text"
-                icon={<ArrowDownOutlined />}
-                onClick={() => showStockModal(record, 'in')}
-                style={{ color: designTokens.colors.success.main }}
-              />
-            </Tooltip>
-            <Tooltip title="出库">
-              <Button
-                type="text"
-                icon={<ArrowUpOutlined />}
-                onClick={() => showStockModal(record, 'out')}
-                style={{ color: designTokens.colors.error.main }}
-              />
-            </Tooltip>
-            <Tooltip title="删除">
-              <Popconfirm
-                title="确定删除该耗材?"
-                onConfirm={() => handleDelete(record.consumableId)}
-                okText="确定"
-                cancelText="取消"
-              >
-                <Button type="text" danger icon={<DeleteOutlined />} />
-              </Popconfirm>
-            </Tooltip>
-          </Space>
-        ),
+        render: (_, record) => {
+          const imageCount = Array.isArray(record.images) ? record.images.length : 0;
+          return (
+            <Space size="small">
+              <Tooltip title={imageCount > 0 ? `图片（${imageCount}）` : '图片'}>
+                <Button
+                  type="text"
+                  icon={<PictureOutlined />}
+                  onClick={() => setImageModalConsumable(record)}
+                  style={{
+                    color: imageCount > 0 ? designTokens.colors.primary.main : '#bfbfbf',
+                  }}
+                />
+              </Tooltip>
+              <Tooltip title="查看记录">
+                <Button
+                  type="text"
+                  icon={<HistoryOutlined />}
+                  onClick={() => {
+                    setSelectedConsumable(record);
+                    setTimelineModalVisible(true);
+                  }}
+                  style={{ color: designTokens.colors.info.main }}
+                />
+              </Tooltip>
+              <Tooltip title="编辑">
+                <Button
+                  type="text"
+                  icon={<EditOutlined />}
+                  onClick={() => showModal(record)}
+                  style={{ color: designTokens.colors.primary.main }}
+                />
+              </Tooltip>
+              <Tooltip title="入库">
+                <Button
+                  type="text"
+                  icon={<ArrowDownOutlined />}
+                  onClick={() => showStockModal(record, 'in')}
+                  style={{ color: designTokens.colors.success.main }}
+                />
+              </Tooltip>
+              <Tooltip title="出库">
+                <Button
+                  type="text"
+                  icon={<ArrowUpOutlined />}
+                  onClick={() => showStockModal(record, 'out')}
+                  style={{ color: designTokens.colors.error.main }}
+                />
+              </Tooltip>
+              <Tooltip title="删除">
+                <Popconfirm
+                  title="确定删除该耗材?"
+                  onConfirm={() => handleDelete(record.consumableId)}
+                  okText="确定"
+                  cancelText="取消"
+                >
+                  <Button type="text" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </Tooltip>
+            </Space>
+          );
+        },
       },
     ],
     [showModal, showStockModal, handleDelete]
@@ -2155,6 +2209,54 @@ function ConsumableManagement() {
                   </Form.Item>
                 </Col>
               </Row>
+            </div>
+
+            {/* 耗材图片 */}
+            <div
+              style={{
+                background: 'linear-gradient(135deg, #f5f7ff 0%, #eef6ff 100%)',
+                borderRadius: designTokens.borderRadius.lg,
+                padding: '20px',
+                marginBottom: '20px',
+                border: '1px solid #dbe4ff',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '16px',
+                  fontSize: '15px',
+                  fontWeight: '600',
+                  color: designTokens.colors.neutral[700],
+                }}
+              >
+                <div
+                  style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    background: designTokens.colors.primary.gradient,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    fontSize: '12px',
+                  }}
+                >
+                  <PictureOutlined />
+                </div>
+                耗材图片
+              </div>
+              <ImageUploader
+                entity="consumables"
+                entityId={editingConsumable?.consumableId || null}
+                value={images}
+                onChange={setImages}
+                pendingFiles={pendingImages}
+                onPendingChange={setPendingImages}
+              />
             </div>
 
             {/* 库存预警设置 */}
@@ -5451,6 +5553,25 @@ function ConsumableManagement() {
         onClose={() => {
           setTimelineModalVisible(false);
           setSelectedConsumable(null);
+        }}
+      />
+
+      {/* 图片管理弹窗：查看/上传/删除当前耗材的图片，变更即时回写列表 */}
+      <ImageManagerModal
+        open={Boolean(imageModalConsumable)}
+        entity="consumables"
+        entityId={imageModalConsumable?.consumableId}
+        images={imageModalConsumable?.images}
+        title="耗材图片"
+        onClose={() => setImageModalConsumable(null)}
+        onChange={nextImages => {
+          const targetId = imageModalConsumable?.consumableId;
+          setImageModalConsumable(prev => (prev ? { ...prev, images: nextImages } : prev));
+          setConsumables(prev =>
+            prev.map(item =>
+              item.consumableId === targetId ? { ...item, images: nextImages } : item
+            )
+          );
         }}
       />
     </motion.div>
