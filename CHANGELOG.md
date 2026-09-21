@@ -4,6 +4,41 @@
 
 ***
 
+## \[2.8.0] - 2026-09-21
+
+### 新增功能
+
+- 端口自动采集 新增交换机端口自动化采集功能，支持 SSH/SNMP/Telnet 多协议接入，内置华为/H3C/Cisco/锐捷厂商驱动与解析器；新增 POST /api/port-discovery/discover（采集并返回差异预览）与 /api/port-discovery/apply（差异批量落库，事务原子 + 幂等合并）
+- 端口自动采集 新增设备采集凭据管理，新增 device_credentials 表与 GET/POST/PUT/DELETE /api/device-credentials 接口，密码/community/Token 经 crypto.js 加密存储、API 输出掩码；支持厂商自动识别与连通性测试；依赖新增 net-snmp
+- 端口自动采集 前端新增 PortDiscoveryModal 采集弹窗、DevicePortCard 端口卡片与 DeviceCredentialSection 凭据管理区块；PortManagement 页面支持采集预览、差异合并与凭据维护
+- 设备/耗材 新增图片上传功能，支持多图上传、预览与删除；新增通用图片附件接口 POST /api/images（上传）与 DELETE /api/images（删除），按 entity 分发到设备/耗材，权限分别校验 device:create/device:edit 与 consumable:create/consumable:edit
+
+- 通用 后端新增 imageAttachment 工具模块（MIME/大小校验、安全文件名、目录穿越防护、旧图清理），前端新增共享 ImageUploader 组件（瓦片式预览、悬停浮起与图片微缩放、悬停显示删除、预览遮罩带图标）与 ImageManagerModal 弹窗（渐变头部 + 图标芯片 + 张数徽标 + 即时保存提示），列表内可直接管理图片；图片以 JSON 数组存于实体 images 列并落盘 uploads/{entity}/，纳入备份「包含文件」范围
+
+### 功能改进
+
+- 设备/耗材 列表「操作」列新增「图片」按钮（有图时高亮并在 Tooltip 显示张数），点击弹出图片管理弹窗，可直接查看/上传/删除该条记录的图片，上传与删除即时保存；设备详情弹窗新增图片画廊
+
+- 端口自动采集 采集前自动校验设备实际厂商（version 命令），配置不符时自动纠正；解析结果为空时安全保护，避免误判已有端口全部失效
+
+### 问题修复
+
+- 数据库同步 修复已有库不会自动补列的问题：Device/Consumable 此前仅由 `sequelize.sync({ alter:false })` 建表，已存在的表不会新增字段，导致模型新增列（如 `images`）在 MySQL 上缺失，设备列表查询报 `Unknown column` 而接口 500。现将 Device/Consumable 纳入 safeSync 自动补列，并新增 `backend/scripts/add-images-column.js` 幂等迁移脚本
+
+- 数据库同步 safeSync 在新增 MySQL 不支持 DEFAULT 的列（JSON/TEXT/BLOB/GEOMETRY）后按模型默认值回填历史行，避免旧数据为 NULL；列默认值规则抽为 `backend/utils/schemaUtils.js` 纯函数并补单测
+
+- 数据库迁移 将 images 列迁移并入 `backend/scripts/migrate-all.js`（新增「设备/耗材图片字段」迁移项），升级到已有库时执行 `node scripts/migrate-all.js` 即可幂等补齐 devices/consumables 的 images 列并回填历史行，无需再单独运行 add-images-column.js
+
+- 设备/耗材图片 修复「一次选择多张上传，只剩最后一张」的问题：上传/删除接口的「读 → 改 → 写」未加互斥，多文件并发时各请求读到同一份旧数组、各自写回互相覆盖（且未写入的图片文件成为孤儿文件）。新增实体级串行队列 `backend/utils/entityMutationQueue.js`，同一实体的图片操作用 `images:{entity}:{id}` 作为互斥键串行执行；落库失败时回滚刚写入的磁盘文件；前端 ImageUploader 同步串行化上传并合并提示（固定 message key），避免响应乱序回写与提示刷屏，并在并发选择时按「已存在 + 在途」正确判断数量上限
+
+### 其他
+
+- 数据库迁移 将线缆字段、设备凭据表、Telnet 协议扩展、重复索引清理、warehouseId 外键清理等历史迁移统一并入 `backend/scripts/migrate-all.js`，并归档清理 backend/scripts 下多个一次性历史脚本至 `backend/scripts/archive/`
+- 安装脚本 新增 Linux 下 PM2 开机自启自动配置（root/普通用户分支，失败时提示手动命令）
+- 数据库连接 MySQL 连接统一使用 utf8mb4 字符集与排序规则
+
+---
+
 ## \[2.7.1] - 2026-09-14
 
 ### 新增功能

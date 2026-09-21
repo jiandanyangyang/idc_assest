@@ -32,6 +32,7 @@ import {
   UnorderedListOutlined,
   SafetyCertificateOutlined,
   QrcodeOutlined,
+  PictureOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -73,8 +74,10 @@ import {
 } from '../components/device';
 import DeviceQrModal from '../components/DeviceQrModal';
 import DeviceQrBatchModal from '../components/DeviceQrBatchModal';
+import ImageManagerModal from '../components/common/ImageManagerModal';
 import { useDebounce } from '../hooks/useDebounce';
 import { getDeviceTypeIcon, getStatusConfig, processDeviceData } from '../utils/deviceUtils.jsx';
+import { imageAPI } from '../api';
 
 const { Option } = Select;
 
@@ -138,6 +141,8 @@ function DeviceManagement() {
   // 设备二维码弹窗：qrModalDevice 为当前打开弹窗的设备（null 表示关闭），qrBatchOpen 控制批量弹窗
   const [qrModalDevice, setQrModalDevice] = useState(null);
   const [qrBatchOpen, setQrBatchOpen] = useState(false);
+  // 图片管理弹窗：imageModalDevice 为当前管理图片的设备（null 表示关闭）
+  const [imageModalDevice, setImageModalDevice] = useState(null);
   const [columnWidths, setColumnWidths] = useState({});
   const [advancedSearchVisible, setAdvancedSearchVisible] = useState(false);
 
@@ -286,13 +291,30 @@ function DeviceManagement() {
     setEditingDevice(null);
   };
 
-  const handleSubmit = async deviceData => {
+  const handleSubmit = async (deviceData, pendingImages = []) => {
     try {
       if (editingDevice) {
         await axios.put(`/api/devices/${editingDevice.deviceId}`, deviceData);
         message.success('设备更新成功');
       } else {
-        await axios.post('/api/devices', deviceData);
+        const response = await axios.post('/api/devices', deviceData);
+        const created = response?.data || {};
+        const newId = created.deviceId;
+        // 新增设备后，将表单中暂存的图片上传到新设备
+        if (newId && pendingImages.length > 0) {
+          let ok = 0;
+          for (const file of pendingImages) {
+            try {
+              await imageAPI.upload('devices', newId, file);
+              ok += 1;
+            } catch (imgErr) {
+              console.error('设备图片上传失败:', imgErr);
+            }
+          }
+          if (ok < pendingImages.length) {
+            message.warning(`设备已创建，${pendingImages.length - ok} 张图片上传失败`);
+          }
+        }
         message.success('设备创建成功');
       }
 
@@ -859,12 +881,14 @@ function DeviceManagement() {
           minWidth: 80,
           maxWidth: field.fieldType === 'textarea' ? 300 : 200,
           onHeaderCell: handleHeaderCellResize(field.fieldName),
-          ellipsis: field.fieldType !== 'textarea',
+          ellipsis: { showTitle: true },
+          align: field.fieldType === 'number' ? 'center' : undefined,
         };
 
         if (field.fieldName === 'deviceId' || field.fieldName === 'name') {
           columnConfig.render = (value, record) => (
             <a
+              title={value}
               onClick={() => handleShowDetail(record)}
               style={{
                 color: '#1890ff',
@@ -890,46 +914,66 @@ function DeviceManagement() {
     generatedColumns.push({
       title: '操作',
       key: 'action',
-      width: columnWidths.action || 110,
+      width: columnWidths.action || 160,
       minWidth: 60,
-      maxWidth: 100,
+      maxWidth: 240,
+      fixed: 'right',
       onHeaderCell: handleHeaderCellResize('action'),
-      render: (_, record) => (
-        <div style={{ display: 'flex', gap: '4px' }}>
-          <Tooltip title="编辑">
-            <Button
-              type="text"
-              icon={<EditOutlined />}
-              onClick={() => showModal(record)}
-              size="small"
-              style={{ color: '#1890ff', padding: '4px 8px' }}
-            />
-          </Tooltip>
-          <Tooltip title="删除">
-            <Button
-              type="text"
-              danger
-              icon={<DeleteOutlined />}
-              onClick={() => handleDelete(record.deviceId)}
-              size="small"
-              style={{ padding: '4px 8px' }}
-            />
-          </Tooltip>
-          <Tooltip title="二维码">
-            <Button
-              type="text"
-              icon={<QrcodeOutlined />}
-              onClick={e => {
-                // 阻止冒泡，避免触发行点击选中
-                e.stopPropagation();
-                setQrModalDevice(buildQrDevice(record));
-              }}
-              size="small"
-              style={{ color: '#1890ff', padding: '4px 8px' }}
-            />
-          </Tooltip>
-        </div>
-      ),
+      render: (_, record) => {
+        const imageCount = Array.isArray(record.images) ? record.images.length : 0;
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+            <Tooltip title={imageCount > 0 ? `图片（${imageCount}）` : '图片'}>
+              <Button
+                type="text"
+                icon={<PictureOutlined />}
+                onClick={e => {
+                  // 阻止冒泡，避免触发行点击选中
+                  e.stopPropagation();
+                  setImageModalDevice(record);
+                }}
+                size="small"
+                style={{
+                  color: imageCount > 0 ? '#1890ff' : '#bfbfbf',
+                  padding: '4px 8px',
+                }}
+              />
+            </Tooltip>
+            <Tooltip title="编辑">
+              <Button
+                type="text"
+                icon={<EditOutlined />}
+                onClick={() => showModal(record)}
+                size="small"
+                style={{ color: '#1890ff', padding: '4px 8px' }}
+              />
+            </Tooltip>
+            <Tooltip title="删除">
+              <Button
+                type="text"
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => handleDelete(record.deviceId)}
+                size="small"
+                style={{ padding: '4px 8px' }}
+              />
+            </Tooltip>
+            <Tooltip title="二维码">
+              <Button
+                type="text"
+                icon={<QrcodeOutlined />}
+                onClick={e => {
+                  // 阻止冒泡，避免触发行点击选中
+                  e.stopPropagation();
+                  setQrModalDevice(buildQrDevice(record));
+                }}
+                size="small"
+                style={{ color: '#1890ff', padding: '4px 8px' }}
+              />
+            </Tooltip>
+          </div>
+        );
+      },
     });
 
     return generatedColumns;
@@ -1361,7 +1405,7 @@ function DeviceManagement() {
                 style: { marginTop: '16px' },
               }}
               onChange={handleTableChange}
-              scroll={{ y: 500, scrollToFirstRowOnChange: true }}
+              scroll={{ x: 'max-content', y: 500, scrollToFirstRowOnChange: true }}
               virtual
               components={{
                 header: {
@@ -1501,6 +1545,25 @@ function DeviceManagement() {
         open={qrBatchOpen}
         devices={qrDevicesForBatch}
         onClose={() => setQrBatchOpen(false)}
+      />
+
+      {/* 图片管理弹窗：查看/上传/删除当前设备的图片，变更即时回写列表 */}
+      <ImageManagerModal
+        open={Boolean(imageModalDevice)}
+        entity="devices"
+        entityId={imageModalDevice?.deviceId}
+        images={imageModalDevice?.images}
+        title="设备图片"
+        onClose={() => setImageModalDevice(null)}
+        onChange={nextImages => {
+          const targetId = imageModalDevice?.deviceId;
+          setImageModalDevice(prev => (prev ? { ...prev, images: nextImages } : prev));
+          setAllDevices(prev =>
+            prev.map(item =>
+              item.deviceId === targetId ? { ...item, images: nextImages } : item
+            )
+          );
+        }}
       />
 
       {/* 标记为空闲弹窗：要求填写空闲原因/备注 */}

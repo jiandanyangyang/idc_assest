@@ -11,6 +11,11 @@ const { FILE_UPLOAD } = require('./config');
 const { generateId } = require('./utils/idGenerator');
 const logger = require('./utils/logger').module('Server');
 const requestLogger = require('./middleware/requestLogger');
+const {
+  supportsColumnDefault,
+  getTypeKey,
+  serializeDefaultValue,
+} = require('./utils/schemaUtils');
 
 const app = express();
 const PORT = process.env.PORT || 8000;
@@ -93,12 +98,15 @@ async function syncOperationLogModel() {
 
 async function syncBusinessModels() {
   const User = require('./models/User');
+  const Device = require('./models/Device');
+  const Consumable = require('./models/Consumable');
   const Business = require('./models/Business');
   const DeviceBusiness = require('./models/DeviceBusiness');
   const Warehouse = require('./models/Warehouse');
   const Cable = require('./models/Cable');
   const DevicePort = require('./models/DevicePort');
   const NetworkCard = require('./models/NetworkCard');
+  const DeviceCredential = require('./models/DeviceCredential');
   const PendingDevice = require('./models/PendingDevice');
   const Role = require('./models/Role');
   const Permission = require('./models/Permission');
@@ -144,12 +152,34 @@ async function syncBusinessModels() {
 
       for (const col of missingColumns) {
         const attr = attributes[col];
+
+        // MySQL 不支持 JSON/TEXT/BLOB/GEOMETRY 列使用字面量 DEFAULT；Sequelize 生成 DDL 时会
+        // 自动忽略该默认值（实测 ADD COLUMN 本身成功，但列不带 DEFAULT），于是历史行只能取 NULL。
+        // 故此类列新增后按模型默认值回填，使历史行与模型默认值（如 images 的 []）保持一致。
+        const supportsDefault = supportsColumnDefault(getTypeKey(attr.type));
+
         await qi.addColumn(tableName, col, {
           type: attr.type,
           allowNull: attr.allowNull !== false,
-          defaultValue: attr.defaultValue,
+          ...(supportsDefault ? { defaultValue: attr.defaultValue } : {}),
           comment: attr.comment,
         });
+
+        // 无默认值列：回填历史行为模型默认值，避免旧数据为 NULL
+        const backfill = supportsDefault ? undefined : serializeDefaultValue(attr.defaultValue);
+        if (backfill !== undefined) {
+          try {
+            await sequelize.query(
+              `UPDATE \`${tableName}\` SET \`${col}\` = ? WHERE \`${col}\` IS NULL`,
+              { replacements: [backfill] }
+            );
+          } catch (backfillErr) {
+            logger.warn(`模型 ${label} 字段 ${col} 回填默认值失败（不影响启动）`, {
+              error: backfillErr.message,
+            });
+          }
+        }
+
         logger.info(`模型 ${label} 添加缺失字段: ${col}`);
       }
     } catch (err) {
@@ -168,10 +198,15 @@ async function syncBusinessModels() {
   await safeSync(Cable, 'Cable');
   await safeSync(DevicePort, 'DevicePort');
   await safeSync(NetworkCard, 'NetworkCard');
+  await safeSync(DeviceCredential, 'DeviceCredential');
   await safeSync(DeviceBusiness, 'DeviceBusiness');
   await safeSync(PendingDevice, 'PendingDevice');
   await safeSync(Ticket, 'Ticket');
   await safeSync(TicketOperationRecord, 'TicketOperationRecord');
+  // 设备/耗材此前仅由 sequelize.sync({ alter:false }) 建表，已存在的表不会补列，
+  // 导致模型新增字段（如 images）无法自动迁移到已有库 → 纳入 safeSync 支持自动补列
+  await safeSync(Device, 'Device');
+  await safeSync(Consumable, 'Consumable');
 
   logger.info('用户/业务/库房/工单等扩展模型同步完成' + (process.env.NODE_ENV !== 'production' ? '（alter mode）' : '（safe mode）'));
 }

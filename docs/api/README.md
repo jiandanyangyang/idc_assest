@@ -12,6 +12,7 @@
 - [机柜管理接口](#机柜管理接口)
 - [设备管理接口](#设备管理接口)
 - [设备字段接口](#设备字段接口)
+- [图片附件接口](#图片附件接口)
 - [设备端口接口](#设备端口接口)
 - [网卡接口](#网卡接口)
 - [线缆接口](#线缆接口)
@@ -675,6 +676,67 @@ GET /api/devices/:deviceId/tickets
 | status | string | 按状态筛选 |
 | page | number | 页码 |
 | pageSize | number | 每页数量 |
+
+---
+
+## 图片附件接口
+
+设备与耗材共用的图片上传/删除接口。图片以 JSON 数组形式存储于实体的 `images` 列，文件落盘于 `uploads/{entity}/`，通过 `/uploads/...` 静态访问。
+
+### 上传图片
+
+```http
+POST /api/images
+Content-Type: multipart/form-data
+```
+
+**表单字段：**
+
+| 字段名 | 类型 | 必填 | 描述 |
+|--------|------|------|------|
+| entity | string | 是 | 归属类型：`devices` 或 `consumables` |
+| id | string | 是 | 实体主键（deviceId / consumableId） |
+| image | file | 是 | 图片文件，支持 JPG/PNG/GIF/WebP，单张不超过 10MB |
+
+**权限：** 设备需 `device:create` 或 `device:edit`；耗材需 `consumable:create` 或 `consumable:edit`
+
+**响应示例：**
+
+```json
+{
+  "success": true,
+  "message": "图片上传成功",
+  "data": {
+    "images": [
+      {
+        "url": "/uploads/devices/DEVxxxx_1699999999999_a1b2c3.jpg",
+        "name": "front.jpg",
+        "size": 20480,
+        "uploadedAt": "2026-09-14T09:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+### 删除图片
+
+```http
+DELETE /api/images
+Content-Type: application/json
+```
+
+**请求体：**
+
+```json
+{
+  "entity": "devices",
+  "id": "DEVxxxx",
+  "url": "/uploads/devices/DEVxxxx_1699999999999_a1b2c3.jpg"
+}
+```
+
+删除成功后同时移除 `images` 数组项与磁盘文件。
 
 ---
 

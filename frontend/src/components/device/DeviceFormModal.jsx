@@ -19,11 +19,13 @@ import {
   EditOutlined,
   DatabaseOutlined,
   ExclamationCircleOutlined,
+  PictureOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { designTokens } from '../../config/theme';
 import { getFormInitialValues, prepareDeviceFormData } from '../../utils/deviceUtils.jsx';
 import { deviceAPI } from '../../api';
+import ImageUploader from '../common/ImageUploader';
 
 const { Option } = Select;
 
@@ -71,6 +73,9 @@ const DeviceFormModal = ({
   const [positionConflict, setPositionConflict] = useState(null);
   const [checkingPosition, setCheckingPosition] = useState(false);
   const [heightExceedWarning, setHeightExceedWarning] = useState(null);
+  // 设备图片：images 为服务端已存图片（编辑态），pendingImages 为新增时暂存待上传文件
+  const [images, setImages] = useState([]);
+  const [pendingImages, setPendingImages] = useState([]);
 
   const selectedRackHeight = useMemo(() => {
     if (!selectedRackId || !racks || racks.length === 0) return 42;
@@ -92,6 +97,8 @@ const DeviceFormModal = ({
           initialValues.warrantyExpiry = dayjs(initialValues.warrantyExpiry);
         }
         form.setFieldsValue(initialValues);
+        setImages(Array.isArray(editingDevice.images) ? editingDevice.images : []);
+        setPendingImages([]);
         if (editingDevice.rackId) {
           const rack = racks.find(r => r.rackId === editingDevice.rackId);
           if (rack) {
@@ -112,6 +119,8 @@ const DeviceFormModal = ({
         setSelectedRoomId(null);
         setSelectedRackId(null);
         setPositionConflict(null);
+        setImages([]);
+        setPendingImages([]);
       }
     }
   }, [visible, editingDevice, racks, form]);
@@ -222,7 +231,7 @@ const DeviceFormModal = ({
       return;
     }
     const deviceData = prepareDeviceFormData(values, !!editingDevice);
-    onSubmit(deviceData);
+    onSubmit(deviceData, pendingImages);
   };
 
   const handleRoomChange = value => {
@@ -581,6 +590,55 @@ const DeviceFormModal = ({
     >
       <Form form={form} layout="vertical" onFinish={handleSubmit}>
         <Row gutter={16}>{formItems}</Row>
+
+        {/* 设备图片区块 */}
+        <div
+          style={{
+            marginTop: '8px',
+            marginBottom: '8px',
+            padding: '18px 20px',
+            borderRadius: '14px',
+            border: `1px solid ${designTokens.colors.primary.bg}`,
+            background: 'linear-gradient(160deg, #f5f7ff 0%, #eef6ff 100%)',
+          }}
+        >
+          <div
+            style={{
+              fontSize: '14px',
+              fontWeight: '600',
+              color: designTokens.colors.primary.main,
+              marginBottom: '16px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+            }}
+          >
+            <span
+              style={{
+                width: '22px',
+                height: '22px',
+                borderRadius: '6px',
+                background: designTokens.colors.primary.gradient,
+                color: '#ffffff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '12px',
+              }}
+            >
+              <PictureOutlined />
+            </span>
+            设备图片
+          </div>
+          <ImageUploader
+            entity="devices"
+            entityId={editingDevice?.deviceId || null}
+            value={images}
+            onChange={setImages}
+            pendingFiles={pendingImages}
+            onPendingChange={setPendingImages}
+          />
+        </div>
 
         <div
           style={{

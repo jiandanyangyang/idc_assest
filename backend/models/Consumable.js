@@ -60,6 +60,12 @@ const Consumable = sequelize.define(
       defaultValue: [],
       comment: 'SN序列号列表，JSON数组格式',
     },
+    images: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      defaultValue: [],
+      comment: '耗材图片列表，JSON数组 [{url,name,size,uploadedAt}]',
+    },
     status: {
       type: DataTypes.STRING,
       defaultValue: 'active',

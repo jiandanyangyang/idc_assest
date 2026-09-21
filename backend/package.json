@@ -1,6 +1,6 @@
 {
   "name": "idc-backend",
-  "version": "2.7.1",
+  "version": "2.8.0",
   "description": "IDC设备管理系统后端",
   "author": "gituib",
   "license": "GPL-3.0-or-later",
@@ -31,7 +31,9 @@
     "test:operation-logs": "jest tests/operationLog.model.test.js tests/operationLogger.test.js tests/operationLogs.api.test.js --runInBand"
   },
   "nodemonConfig": {
-    "watch": ["."],
+    "watch": [
+      "."
+    ],
     "ext": "js,mjs,cjs",
     "ignore": [
       "config/*.json",
@@ -59,6 +61,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "mysql2": "^3.19.1",
+    "net-snmp": "^3.29.1",
     "node-cron": "^4.2.1",
     "nodemailer": "^9.0.3",
     "sequelize": "^6.37.8",

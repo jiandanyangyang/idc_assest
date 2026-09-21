@@ -22,6 +22,10 @@ const routesConfig = [
     path: '/api/deviceFields',
   },
   {
+    file: 'images.js',
+    path: '/api/images',
+  },
+  {
     file: 'background.js',
     path: '/api/background',
   },
@@ -116,6 +120,14 @@ const routesConfig = [
   {
     file: 'portOptions.js',
     path: '/api/port-options',
+  },
+  {
+    file: 'portDiscovery.js',
+    path: '/api/port-discovery',
+  },
+  {
+    file: 'deviceCredentials.js',
+    path: '/api/device-credentials',
   },
   {
     file: 'public.js',
